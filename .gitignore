@@ -5,5 +5,5 @@ node_modules
 *.pem
 *.key
 ansible/inventory.ini
-ansible/group_vars/*
+ansible/group_vars/
 *.retry
