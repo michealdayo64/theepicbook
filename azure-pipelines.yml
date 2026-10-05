@@ -262,7 +262,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 34.237.145.113
+          HostName 3.235.104.110
           User ubuntu
           IdentityFile $SSH_KEY_PATH
           IdentitiesOnly yes
@@ -421,7 +421,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 34.237.145.113
+          HostName 3.235.104.110
           User ubuntu
           IdentityFile $SSH_KEY_PATH
           IdentitiesOnly yes
@@ -547,7 +547,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 34.237.145.113
+          HostName 3.235.104.110
           User ubuntu
           IdentityFile $SSH_KEY_PATH
           IdentitiesOnly yes
