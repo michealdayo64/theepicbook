@@ -78,7 +78,7 @@ stages:
       - job: PrepareAnsible
         displayName: "Install Ansible and Prepare SSH Key"
         pool:
-          vmImage: "epicbook-agent-pool"
+          name: "epicbook-agent-pool"
 
         steps:
 
@@ -149,7 +149,7 @@ stages:
       - job: ValidateAnsible
         displayName: "Validate Inventory, Playbook and SSH Connectivity"
         pool:
-          vmImage: "epicbook-agent-pool"
+          name: "epicbook-agent-pool"
 
         steps:
 
@@ -255,7 +255,7 @@ stages:
       - job: DeployEpicBook
         displayName: "Run EpicBook Ansible Deployment"
         pool:
-          vmImage: "ubuntu-latest"
+          name: "epicbook-agent-pool"
 
         steps:
 
@@ -338,7 +338,7 @@ stages:
       - job: VerifyDeployment
         displayName: "Summarize Deployment Result"
         pool:
-          vmImage: "ubuntu-latest"
+          name: "epicbook-agent-pool"
 
         steps:
 
