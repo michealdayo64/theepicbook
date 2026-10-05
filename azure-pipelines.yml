@@ -29,6 +29,7 @@ variables:
 # ============================================================
 # STAGE 1: PREPARE
 # ============================================================
+
 stages:
 
 - stage: Prepare
@@ -72,7 +73,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Create Ansible virtual environment
+    # Create isolated Ansible environment
     # --------------------------------------------------------
     - bash: |
         set -e
@@ -95,7 +96,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Install Ansible MySQL collection
+    # Install MySQL Ansible collection
     # --------------------------------------------------------
     - bash: |
         set -e
@@ -110,7 +111,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Download SSH private key from Azure DevOps Library
+    # Download SSH private key
     # --------------------------------------------------------
     - task: DownloadSecureFile@1
       name: downloadSSHKey
@@ -121,10 +122,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Prepare SSH private key
-    #
-    # DownloadSecureFile already downloads the key to the
-    # temporary directory, so DO NOT copy it again.
+    # Prepare SSH key
     # --------------------------------------------------------
     - bash: |
         set -e
@@ -175,8 +173,6 @@ stages:
     - bash: |
         set -e
 
-        echo "Installing Python tooling..."
-
         sudo apt-get update
         sudo apt-get install -y python3-pip python3-venv
 
@@ -198,7 +194,6 @@ stages:
         "$VENV_PATH/bin/python" -m pip install --upgrade pip
         "$VENV_PATH/bin/pip" install ansible
 
-        echo "Installed Ansible:"
         "$VENV_PATH/bin/ansible" --version
 
         echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
@@ -207,7 +202,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Install Ansible MySQL collection
+    # Install MySQL collection
     # --------------------------------------------------------
     - bash: |
         set -e
@@ -247,8 +242,6 @@ stages:
     # --------------------------------------------------------
     - bash: |
         set -e
-
-        echo "Checking Ansible playbook syntax..."
 
         "$ANSIBLE_VENV/bin/ansible-playbook" \
           ansible/site.yml \
@@ -292,6 +285,49 @@ stages:
 
 
     # --------------------------------------------------------
+    # Create temporary SSH configuration
+    #
+    # Frontend:
+    #   Direct connection
+    #
+    # Backend:
+    #   Connection through frontend
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
+
+        cat > "$SSH_CONFIG" <<EOF
+        Host 34.237.145.113
+          HostName 34.237.145.113
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+
+        Host 10.0.2.157
+          HostName 10.0.2.157
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          ProxyJump ubuntu@34.237.145.113
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+        EOF
+
+        chmod 600 "$SSH_CONFIG"
+
+        echo "SSH configuration created."
+
+        echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
+
+      displayName: "Configure SSH Jump Host"
+
+      env:
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+
+    # --------------------------------------------------------
     # Test SSH connectivity
     # --------------------------------------------------------
     - bash: |
@@ -303,18 +339,18 @@ stages:
           -i ansible/inventory.ini \
           all \
           -m ping \
-          --private-key "$SSH_KEY_PATH"
+          --private-key "$SSH_KEY_PATH" \
+          --ssh-common-args="-F $SSH_CONFIG"
 
-        echo "SSH connectivity test completed."
+        echo "SSH connectivity test completed successfully."
 
       displayName: "Test SSH Connectivity"
 
       env:
         ANSIBLE_VENV: $(ANSIBLE_VENV)
         SSH_KEY_PATH: $(SSH_KEY_PATH)
+        SSH_CONFIG: $(SSH_CONFIG)
 
-        # Prevent:
-        # Host key verification failed
         ANSIBLE_HOST_KEY_CHECKING: "False"
 
 
@@ -353,8 +389,6 @@ stages:
     - bash: |
         set -e
 
-        echo "Installing Python tooling..."
-
         sudo apt-get update
         sudo apt-get install -y python3-pip python3-venv
 
@@ -376,7 +410,6 @@ stages:
         "$VENV_PATH/bin/python" -m pip install --upgrade pip
         "$VENV_PATH/bin/pip" install ansible
 
-        echo "Installed Ansible:"
         "$VENV_PATH/bin/ansible" --version
 
         echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
@@ -428,6 +461,43 @@ stages:
 
 
     # --------------------------------------------------------
+    # Configure SSH jump host
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
+
+        cat > "$SSH_CONFIG" <<EOF
+        Host 34.237.145.113
+          HostName 34.237.145.113
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+
+        Host 10.0.2.157
+          HostName 10.0.2.157
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          ProxyJump ubuntu@34.237.145.113
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+        EOF
+
+        chmod 600 "$SSH_CONFIG"
+
+        echo "SSH jump-host configuration prepared."
+
+        echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
+
+      displayName: "Configure SSH Jump Host"
+
+      env:
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+
+    # --------------------------------------------------------
     # Deploy EpicBook
     # --------------------------------------------------------
     - bash: |
@@ -439,6 +509,7 @@ stages:
           -i ansible/inventory.ini \
           ansible/site.yml \
           --private-key "$SSH_KEY_PATH" \
+          --ssh-common-args="-F $SSH_CONFIG" \
           -e "db_admin_username=$DB_ADMIN_USERNAME" \
           -e "db_admin_password=$DB_ADMIN_PASSWORD"
 
@@ -449,11 +520,11 @@ stages:
       env:
         ANSIBLE_VENV: $(ANSIBLE_VENV)
         SSH_KEY_PATH: $(SSH_KEY_PATH)
+        SSH_CONFIG: $(SSH_CONFIG)
 
         DB_ADMIN_USERNAME: $(mysqlAdminUsername)
         DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
 
-        # Prevent host key verification failure
         ANSIBLE_HOST_KEY_CHECKING: "False"
 
 
@@ -479,15 +550,12 @@ stages:
 
     steps:
 
-    # --------------------------------------------------------
-    # Checkout repository
-    # --------------------------------------------------------
     - checkout: self
       displayName: "Checkout Repository"
 
 
     # --------------------------------------------------------
-    # Deployment verification summary
+    # Deployment verification
     # --------------------------------------------------------
     - bash: |
         set -e
@@ -498,6 +566,8 @@ stages:
         echo "=================================================="
         echo ""
 
+        echo "Prepare stage: SUCCESS"
+        echo "Validation stage: SUCCESS"
         echo "Configure and Deploy stage: SUCCESS"
         echo "Ansible deployment command: SUCCESS"
         echo "Ansible exit code: 0"
@@ -507,6 +577,10 @@ stages:
         echo ""
         echo "Frontend:"
         echo "http://34.237.145.113"
+
+        echo ""
+        echo "Backend:"
+        echo "10.0.2.157 (private)"
 
         echo ""
         echo "=================================================="
