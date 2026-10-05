@@ -488,7 +488,8 @@ stages:
           --private-key "$(SSH_KEY_PATH)" \
           --ssh-common-args="-F $(SSH_CONFIG)" \
           -e "db_admin_username=$(mysqlAdminUsername)" \
-          -e "db_admin_password=$(mysqlAdminPassword)"
+          -e "db_admin_password=$(mysqlAdminPassword)" \
+          -e "ssh_config_path=$(SSH_CONFIG)"
 
       displayName: "Run Ansible Deployment"
 
@@ -497,8 +498,6 @@ stages:
         SSH_KEY_PATH: $(SSH_KEY_PATH)
         SSH_CONFIG: $(SSH_CONFIG)
         ANSIBLE_HOST_KEY_CHECKING: "False"
-        mysqlAdminUsername: $(mysqlAdminUsername)
-        mysqlAdminPassword: $(mysqlAdminPassword)
 
 
 # ============================================================
