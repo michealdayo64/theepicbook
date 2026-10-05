@@ -1,0 +1,383 @@
+
+# azure-pipelines.yml
+#
+# EpicBook Application CI/CD Pipeline
+#
+# Flow:
+# GitHub push -> Prepare -> Validate -> Configure & Deploy -> Verify
+#
+# IMPORTANT:
+# Each stage runs on a fresh, disposable Azure DevOps agent.
+# Therefore, Ansible, collections, and the SSH key must be installed/downloaded
+# again in every stage. Nothing from a previous stage's filesystem is assumed
+# to exist.
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - server.js
+      - package.json
+      - package-lock.json
+      - routes/*
+      - models/*
+      - views/*
+      - public/*
+      - config/*
+      - db/*
+      - ansible/*
+      - azure-pipelines.yml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - server.js
+      - package.json
+      - package-lock.json
+      - routes/*
+      - models/*
+      - views/*
+      - public/*
+      - config/*
+      - db/*
+      - ansible/*
+      - azure-pipelines.yml
+
+
+# ---------------------------------------------------------------------------
+# Pipeline variables
+# ---------------------------------------------------------------------------
+#
+# Create an Azure DevOps Variable Group containing:
+#
+#   mysqlAdminUsername
+#   mysqlAdminPassword
+#
+# Mark mysqlAdminPassword as secret.
+#
+# Replace the variable group name below with the actual name you create.
+#
+variables:
+  - group: Epicbook-mysql-secrets
+
+
+# ---------------------------------------------------------------------------
+# STAGE 1 - PREPARE
+# ---------------------------------------------------------------------------
+stages:
+
+  - stage: Prepare
+    displayName: "Stage 1 - Prepare Ansible Environment"
+
+    jobs:
+      - job: PrepareAnsible
+        displayName: "Install Ansible and Prepare SSH Key"
+        pool:
+          vmImage: "epicbook-agent-pool"
+
+        steps:
+
+          # Checkout the application repository.
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          # ubuntu-latest already contains Python 3, but we explicitly
+          # upgrade pip and install Ansible so the pipeline does not depend
+          # on the pre-installed Ansible version on the hosted image.
+          - script: |
+              set -euo pipefail
+
+              python3 --version
+              python3 -m pip --version
+
+              python3 -m pip install --user --upgrade pip
+              python3 -m pip install --user ansible
+
+              echo "Ansible installation completed."
+              "$HOME/.local/bin/ansible" --version
+            displayName: "Install Python and Ansible"
+
+          # Install the collection required by the database role.
+          - script: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+
+              echo "community.mysql collection installed."
+            displayName: "Install community.mysql Collection"
+
+          # Download the private key from Azure DevOps Secure Files.
+          - task: DownloadSecureFile@1
+            name: downloadAwsKey
+            displayName: "Download AWS SSH Private Key"
+            inputs:
+              secureFile: "id_ed25519"
+
+          # The Secure File task downloads the file outside the repository
+          # workspace. We copy it to a temporary location and restrict its
+          # permissions. The actual path is exported through an output
+          # variable instead of assuming a fixed path.
+          - bash: |
+              set -euo pipefail
+
+              KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
+
+              cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+              chmod 600 "$KEY_PATH"
+
+              echo "SSH private key prepared in the agent temporary directory."
+              echo "##vso[task.setvariable variable=SSH_KEY_PATH;isOutput=true]$KEY_PATH"
+            name: prepareKey
+            displayName: "Secure SSH Private Key"
+
+
+# ---------------------------------------------------------------------------
+# STAGE 2 - VALIDATE
+# ---------------------------------------------------------------------------
+
+  - stage: Validate
+    displayName: "Stage 2 - Validate Ansible Configuration"
+    dependsOn: Prepare
+    condition: succeeded()
+
+    jobs:
+      - job: ValidateAnsible
+        displayName: "Validate Inventory, Playbook and SSH Connectivity"
+        pool:
+          vmImage: "epicbook-agent-pool"
+
+        steps:
+
+          # Every stage receives a fresh disposable hosted agent.
+          # Therefore we must checkout the repository again and reinstall
+          # Ansible and its collections.
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          - script: |
+              set -euo pipefail
+
+              python3 -m pip install --user --upgrade pip
+              python3 -m pip install --user ansible
+
+              "$HOME/.local/bin/ansible" --version
+            displayName: "Install Ansible on Fresh Agent"
+
+          - script: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+            displayName: "Install community.mysql Collection"
+
+          # Secure Files are also stage/job scoped. The key therefore has
+          # to be downloaded again instead of relying on Stage 1's filesystem.
+          - task: DownloadSecureFile@1
+            name: downloadAwsKey
+            displayName: "Download AWS SSH Private Key"
+            inputs:
+              secureFile: "id_ed25519"
+
+          - bash: |
+              set -euo pipefail
+
+              KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
+
+              cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+              chmod 600 "$KEY_PATH"
+
+              echo "SSH key prepared for validation."
+              echo "##vso[task.setvariable variable=SSH_KEY_PATH]$KEY_PATH"
+            displayName: "Prepare SSH Key for Validation"
+
+          # Validate that the inventory can be parsed successfully.
+          - bash: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-inventory" \
+                -i ansible/inventory.ini \
+                --list > "$(Agent.TempDirectory)/ansible-inventory.json"
+
+              echo "Ansible inventory syntax is valid."
+            displayName: "Validate Ansible Inventory"
+
+          # Validate the complete playbook without executing it.
+          - bash: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-playbook" \
+                ansible/site.yml \
+                -i ansible/inventory.ini \
+                --syntax-check
+
+              echo "Ansible playbook syntax is valid."
+            displayName: "Validate Playbook Syntax"
+
+          # Test actual SSH connectivity to every host in the inventory.
+          # A failure here stops the pipeline before any configuration changes
+          # are made to the application infrastructure.
+          - bash: |
+              set -euo pipefail
+
+              echo "Testing SSH connectivity to all Ansible hosts..."
+
+              if ! "$HOME/.local/bin/ansible" \
+                -i ansible/inventory.ini \
+                all \
+                -m ping \
+                --private-key "$SSH_KEY_PATH"
+              then
+                echo "ERROR: One or more Ansible hosts are unreachable."
+                echo "The Configure and Deploy stage will not run."
+                exit 1
+              fi
+
+              echo "SSH connectivity test succeeded for all hosts."
+            displayName: "Test SSH Connectivity"
+            env:
+              SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+
+# ---------------------------------------------------------------------------
+# STAGE 3 - CONFIGURE AND DEPLOY
+# ---------------------------------------------------------------------------
+
+  - stage: ConfigureAndDeploy
+    displayName: "Stage 3 - Configure and Deploy EpicBook"
+    dependsOn: Validate
+    condition: succeeded()
+
+    jobs:
+      - job: DeployEpicBook
+        displayName: "Run EpicBook Ansible Deployment"
+        pool:
+          vmImage: "ubuntu-latest"
+
+        steps:
+
+          # Fresh agent: checkout the repository and bootstrap Ansible again.
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          - script: |
+              set -euo pipefail
+
+              python3 -m pip install --user --upgrade pip
+              python3 -m pip install --user ansible
+
+              "$HOME/.local/bin/ansible" --version
+            displayName: "Install Ansible on Fresh Agent"
+
+          - script: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+            displayName: "Install community.mysql Collection"
+
+          # Secure Files are not persisted between stages.
+          # Download the private key again for this deployment job.
+          - task: DownloadSecureFile@1
+            name: downloadAwsKey
+            displayName: "Download AWS SSH Private Key"
+            inputs:
+              secureFile: "epicbook-aws-key"
+
+          - bash: |
+              set -euo pipefail
+
+              KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
+
+              cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+              chmod 600 "$KEY_PATH"
+
+              echo "SSH key prepared for deployment."
+              echo "##vso[task.setvariable variable=SSH_KEY_PATH]$KEY_PATH"
+            displayName: "Prepare SSH Key for Deployment"
+
+          # Run the complete Ansible deployment.
+          #
+          # The database credentials are passed directly to Ansible as
+          # extra-vars. They are supplied through the Azure DevOps variable
+          # group rather than being stored in source control.
+          #
+          # No echo/debug statement prints the extra-vars or their values.
+          - bash: |
+              set -euo pipefail
+
+              "$HOME/.local/bin/ansible-playbook" \
+                -i ansible/inventory.ini \
+                ansible/site.yml \
+                --private-key "$SSH_KEY_PATH" \
+                -e "db_admin_username=$DB_ADMIN_USERNAME" \
+                -e "db_admin_password=$DB_ADMIN_PASSWORD"
+
+            displayName: "Configure Hosts and Deploy EpicBook"
+            env:
+              SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+              # Values come from the Azure DevOps variable group.
+              # mysqlAdminPassword must be configured as a secret variable.
+              DB_ADMIN_USERNAME: $(mysqlAdminUsername)
+              DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
+
+
+# ---------------------------------------------------------------------------
+# STAGE 4 - VERIFY
+# ---------------------------------------------------------------------------
+
+  - stage: Verify
+    displayName: "Stage 4 - Verify Deployment"
+    dependsOn: ConfigureAndDeploy
+    condition: succeeded()
+
+    jobs:
+      - job: VerifyDeployment
+        displayName: "Summarize Deployment Result"
+        pool:
+          vmImage: "ubuntu-latest"
+
+        steps:
+
+          - checkout: self
+            displayName: "Checkout Repository"
+
+          # site.yml already performs the actual verification checks during
+          # Stage 3. We intentionally DO NOT run the playbook again here.
+          #
+          # This stage exists as a final pipeline gate and human-readable
+          # deployment summary. Azure DevOps only reaches this stage when the
+          # ConfigureAndDeploy stage exits successfully.
+          - bash: |
+              set -euo pipefail
+
+              echo "=================================================="
+              echo "EpicBook Deployment Verification"
+              echo "=================================================="
+              echo ""
+              echo "Stage 3 completed successfully."
+              echo ""
+              echo "Ansible deployment result:"
+              echo "  Failed hosts:     0"
+              echo "  Unreachable hosts: 0"
+              echo ""
+              echo "The following inventory groups were targeted:"
+              echo "  frontend"
+              echo "  backend"
+              echo ""
+              echo "The site.yml verification play completed during"
+              echo "Stage 3 and was not re-run in this stage."
+              echo ""
+              echo "Frontend public URL:"
+              echo "  http://34.237.145.113"
+              echo ""
+              echo "Replace <FRONTEND_PUBLIC_IP> with the frontend"
+              echo "public IP produced by the Infrastructure Pipeline."
+              echo ""
+              echo "Deployment verification summary completed."
+              echo "=================================================="
+            displayName: "Print Deployment Verification Summary"
+

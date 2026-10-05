@@ -4,6 +4,6 @@ node_modules
 # Ansible / SSH
 *.pem
 *.key
-ansible/inventory.ini
-ansible/group_vars/
+#ansible/inventory.ini
+#ansible/group_vars/
 *.retry
