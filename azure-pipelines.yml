@@ -6,16 +6,29 @@
 # Flow:
 # GitHub push -> Prepare -> Validate -> Configure & Deploy -> Verify
 #
-# IMPORTANT:
-# Each stage runs on a fresh, disposable Azure DevOps agent.
-# Therefore, Ansible, collections, and the SSH key must be installed/downloaded
-# again in every stage. Nothing from a previous stage's filesystem is assumed
-# to exist.
+# Agent:
+#   Self-hosted Azure DevOps agent pool: epicbook-agent-pool
+#
+# Each stage creates its own Python virtual environment.
+# This avoids modifying the system Python installation on the self-hosted
+# agent and fixes the "No module named pip" problem.
+#
+# The SSH private key is downloaded separately in each stage because each
+# stage/job is treated as an independent execution environment.
+#
+# The private key is never copied into the repository workspace and is never
+# printed or published as a pipeline artifact.
+
+
+# ============================================================================
+# TRIGGER
+# ============================================================================
 
 trigger:
   branches:
     include:
       - main
+
   paths:
     include:
       - server.js
@@ -29,11 +42,17 @@ trigger:
       - db/*
       - ansible/*
       - azure-pipelines.yml
+
+
+# ============================================================================
+# PR VALIDATION
+# ============================================================================
 
 pr:
   branches:
     include:
       - main
+
   paths:
     include:
       - server.js
@@ -49,138 +68,272 @@ pr:
       - azure-pipelines.yml
 
 
-# ---------------------------------------------------------------------------
-# Pipeline variables
-# ---------------------------------------------------------------------------
+# ============================================================================
+# PIPELINE VARIABLES
+# ============================================================================
 #
-# Create an Azure DevOps Variable Group containing:
+# Azure DevOps:
+#
+# Pipelines
+#   -> Library
+#   -> Variable groups
+#
+# Variable group:
+#
+#   Epicbook-mysql-secrets
+#
+# Variables:
 #
 #   mysqlAdminUsername
 #   mysqlAdminPassword
 #
-# Mark mysqlAdminPassword as secret.
-#
-# Replace the variable group name below with the actual name you create.
-#
+# mysqlAdminPassword should be marked as secret.
+# ============================================================================
+
 variables:
   - group: Epicbook-mysql-secrets
 
 
-# ---------------------------------------------------------------------------
-# STAGE 1 - PREPARE
-# ---------------------------------------------------------------------------
+# ============================================================================
+# STAGES
+# ============================================================================
+
 stages:
+
+  # ==========================================================================
+  # STAGE 1 - PREPARE
+  # ==========================================================================
 
   - stage: Prepare
     displayName: "Stage 1 - Prepare Ansible Environment"
 
     jobs:
+
       - job: PrepareAnsible
         displayName: "Install Ansible and Prepare SSH Key"
+
         pool:
           name: "epicbook-agent-pool"
 
         steps:
 
-          # Checkout the application repository.
+          # ------------------------------------------------------------------
+          # Checkout repository
+          # ------------------------------------------------------------------
+
           - checkout: self
             displayName: "Checkout Repository"
 
-          # ubuntu-latest already contains Python 3, but we explicitly
-          # upgrade pip and install Ansible so the pipeline does not depend
-          # on the pre-installed Ansible version on the hosted image.
-          - script: |
+
+          # ------------------------------------------------------------------
+          # Install Python tooling and Ansible
+          # ------------------------------------------------------------------
+          #
+          # The self-hosted agent already has Python 3.12.3.
+          #
+          # However, pip is not installed on the agent.
+          #
+          # Therefore:
+          #
+          # 1. Install python3-pip
+          # 2. Install python3-venv
+          # 3. Create an isolated virtual environment
+          # 4. Install Ansible inside that environment
+          #
+          # This avoids installing Ansible into the system Python.
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
+              echo "Python version:"
               python3 --version
-              python3 -m pip --version
 
-              python3 -m pip install --user --upgrade pip
-              python3 -m pip install --user ansible
+              echo "Installing Python pip and virtual environment support..."
+
+              sudo apt-get update
+
+              sudo apt-get install -y \
+                python3-pip \
+                python3-venv
+
+              echo "Creating isolated Ansible virtual environment..."
+
+              VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+
+              python3 -m venv "$VENV_PATH"
+
+              "$VENV_PATH/bin/python" -m pip install --upgrade pip
+
+              "$VENV_PATH/bin/pip" install ansible
 
               echo "Ansible installation completed."
-              "$HOME/.local/bin/ansible" --version
+
+              "$VENV_PATH/bin/ansible" --version
+
+              echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+
             displayName: "Install Python and Ansible"
 
-          # Install the collection required by the database role.
-          - script: |
+
+          # ------------------------------------------------------------------
+          # Install community.mysql collection
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+              "$ANSIBLE_VENV/bin/ansible-galaxy" \
+                collection install community.mysql
 
-              echo "community.mysql collection installed."
+              echo "community.mysql collection installed successfully."
+
             displayName: "Install community.mysql Collection"
 
-          # Download the private key from Azure DevOps Secure Files.
+            env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+          # ------------------------------------------------------------------
+          # Download AWS SSH private key
+          # ------------------------------------------------------------------
+
           - task: DownloadSecureFile@1
             name: downloadAwsKey
             displayName: "Download AWS SSH Private Key"
+
             inputs:
               secureFile: "id_ed25519"
 
-          # The Secure File task downloads the file outside the repository
-          # workspace. We copy it to a temporary location and restrict its
-          # permissions. The actual path is exported through an output
-          # variable instead of assuming a fixed path.
+
+          # ------------------------------------------------------------------
+          # Prepare SSH private key
+          # ------------------------------------------------------------------
+          #
+          # The key remains outside the repository workspace.
+          #
+          # The key contents are NEVER printed.
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
               KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
 
               cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+
               chmod 600 "$KEY_PATH"
 
               echo "SSH private key prepared in the agent temporary directory."
-              echo "##vso[task.setvariable variable=SSH_KEY_PATH;isOutput=true]$KEY_PATH"
+
+              echo "##vso[task.setvariable variable=SSH_KEY_PATH]$KEY_PATH"
+
             name: prepareKey
-            displayName: "Secure SSH Private Key"
+
+            displayName: "Prepare Secure SSH Key"
 
 
-# ---------------------------------------------------------------------------
-# STAGE 2 - VALIDATE
-# ---------------------------------------------------------------------------
+  # ==========================================================================
+  # STAGE 2 - VALIDATE
+  # ==========================================================================
 
   - stage: Validate
     displayName: "Stage 2 - Validate Ansible Configuration"
-    dependsOn: Prepare
+
+    dependsOn:
+      - Prepare
+
     condition: succeeded()
 
     jobs:
+
       - job: ValidateAnsible
         displayName: "Validate Inventory, Playbook and SSH Connectivity"
+
         pool:
           name: "epicbook-agent-pool"
 
         steps:
 
-          # Every stage receives a fresh disposable hosted agent.
-          # Therefore we must checkout the repository again and reinstall
-          # Ansible and its collections.
+          # ------------------------------------------------------------------
+          # Checkout repository
+          # ------------------------------------------------------------------
+
           - checkout: self
             displayName: "Checkout Repository"
 
-          - script: |
+
+          # ------------------------------------------------------------------
+          # Install Ansible on the fresh stage environment
+          # ------------------------------------------------------------------
+          #
+          # The pipeline does not assume that Ansible installed during the
+          # Prepare stage is available here.
+          #
+          # pip is explicitly installed before it is used.
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
-              python3 -m pip install --user --upgrade pip
-              python3 -m pip install --user ansible
+              echo "Installing Python pip and virtual environment support..."
 
-              "$HOME/.local/bin/ansible" --version
-            displayName: "Install Ansible on Fresh Agent"
+              sudo apt-get update
 
-          - script: |
+              sudo apt-get install -y \
+                python3-pip \
+                python3-venv
+
+              VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+
+              python3 -m venv "$VENV_PATH"
+
+              "$VENV_PATH/bin/python" -m pip install --upgrade pip
+
+              "$VENV_PATH/bin/pip" install ansible
+
+              echo "Ansible version:"
+
+              "$VENV_PATH/bin/ansible" --version
+
+              echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+
+            displayName: "Install Ansible on Fresh Stage Environment"
+
+
+          # ------------------------------------------------------------------
+          # Install community.mysql
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+              "$ANSIBLE_VENV/bin/ansible-galaxy" \
+                collection install community.mysql
+
+              echo "community.mysql collection installed successfully."
+
             displayName: "Install community.mysql Collection"
 
-          # Secure Files are also stage/job scoped. The key therefore has
-          # to be downloaded again instead of relying on Stage 1's filesystem.
+            env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+          # ------------------------------------------------------------------
+          # Download SSH private key again
+          # ------------------------------------------------------------------
+
           - task: DownloadSecureFile@1
             name: downloadAwsKey
             displayName: "Download AWS SSH Private Key"
+
             inputs:
               secureFile: "id_ed25519"
+
+
+          # ------------------------------------------------------------------
+          # Prepare SSH key
+          # ------------------------------------------------------------------
 
           - bash: |
               set -euo pipefail
@@ -188,103 +341,191 @@ stages:
               KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
 
               cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+
               chmod 600 "$KEY_PATH"
 
               echo "SSH key prepared for validation."
+
               echo "##vso[task.setvariable variable=SSH_KEY_PATH]$KEY_PATH"
+
             displayName: "Prepare SSH Key for Validation"
 
-          # Validate that the inventory can be parsed successfully.
+
+          # ------------------------------------------------------------------
+          # Validate inventory
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-inventory" \
+              echo "Validating Ansible inventory..."
+
+              "$ANSIBLE_VENV/bin/ansible-inventory" \
                 -i ansible/inventory.ini \
-                --list > "$(Agent.TempDirectory)/ansible-inventory.json"
+                --list \
+                > "$(Agent.TempDirectory)/ansible-inventory.json"
 
               echo "Ansible inventory syntax is valid."
+
             displayName: "Validate Ansible Inventory"
 
-          # Validate the complete playbook without executing it.
+            env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+          # ------------------------------------------------------------------
+          # Validate playbook syntax
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-playbook" \
+              echo "Validating Ansible playbook syntax..."
+
+              "$ANSIBLE_VENV/bin/ansible-playbook" \
                 ansible/site.yml \
                 -i ansible/inventory.ini \
                 --syntax-check
 
               echo "Ansible playbook syntax is valid."
+
             displayName: "Validate Playbook Syntax"
 
-          # Test actual SSH connectivity to every host in the inventory.
-          # A failure here stops the pipeline before any configuration changes
-          # are made to the application infrastructure.
+            env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+          # ------------------------------------------------------------------
+          # Test SSH connectivity
+          # ------------------------------------------------------------------
+          #
+          # This must succeed before the deployment stage can proceed.
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
               echo "Testing SSH connectivity to all Ansible hosts..."
 
-              if ! "$HOME/.local/bin/ansible" \
+              if ! "$ANSIBLE_VENV/bin/ansible" \
                 -i ansible/inventory.ini \
                 all \
                 -m ping \
                 --private-key "$SSH_KEY_PATH"
               then
+
+                echo ""
                 echo "ERROR: One or more Ansible hosts are unreachable."
                 echo "The Configure and Deploy stage will not run."
+
                 exit 1
               fi
 
+              echo ""
               echo "SSH connectivity test succeeded for all hosts."
+
             displayName: "Test SSH Connectivity"
+
             env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
               SSH_KEY_PATH: $(SSH_KEY_PATH)
 
 
-# ---------------------------------------------------------------------------
-# STAGE 3 - CONFIGURE AND DEPLOY
-# ---------------------------------------------------------------------------
+  # ==========================================================================
+  # STAGE 3 - CONFIGURE AND DEPLOY
+  # ==========================================================================
 
   - stage: ConfigureAndDeploy
     displayName: "Stage 3 - Configure and Deploy EpicBook"
-    dependsOn: Validate
+
+    dependsOn:
+      - Validate
+
     condition: succeeded()
 
     jobs:
+
       - job: DeployEpicBook
         displayName: "Run EpicBook Ansible Deployment"
+
         pool:
           name: "epicbook-agent-pool"
 
         steps:
 
-          # Fresh agent: checkout the repository and bootstrap Ansible again.
+          # ------------------------------------------------------------------
+          # Checkout repository
+          # ------------------------------------------------------------------
+
           - checkout: self
             displayName: "Checkout Repository"
 
-          - script: |
+
+          # ------------------------------------------------------------------
+          # Install Ansible in an isolated virtual environment
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
-              python3 -m pip install --user --upgrade pip
-              python3 -m pip install --user ansible
+              echo "Installing Python pip and virtual environment support..."
 
-              "$HOME/.local/bin/ansible" --version
-            displayName: "Install Ansible on Fresh Agent"
+              sudo apt-get update
 
-          - script: |
+              sudo apt-get install -y \
+                python3-pip \
+                python3-venv
+
+              VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+
+              python3 -m venv "$VENV_PATH"
+
+              "$VENV_PATH/bin/python" -m pip install --upgrade pip
+
+              "$VENV_PATH/bin/pip" install ansible
+
+              echo "Ansible installation completed."
+
+              "$VENV_PATH/bin/ansible" --version
+
+              echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+
+            displayName: "Install Ansible on Fresh Stage Environment"
+
+
+          # ------------------------------------------------------------------
+          # Install community.mysql
+          # ------------------------------------------------------------------
+
+          - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-galaxy" collection install community.mysql
+              "$ANSIBLE_VENV/bin/ansible-galaxy" \
+                collection install community.mysql
+
+              echo "community.mysql collection installed successfully."
+
             displayName: "Install community.mysql Collection"
 
-          # Secure Files are not persisted between stages.
-          # Download the private key again for this deployment job.
+            env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+          # ------------------------------------------------------------------
+          # Download SSH private key again
+          # ------------------------------------------------------------------
+
           - task: DownloadSecureFile@1
             name: downloadAwsKey
             displayName: "Download AWS SSH Private Key"
+
             inputs:
               secureFile: "id_ed25519"
+
+
+          # ------------------------------------------------------------------
+          # Prepare SSH private key
+          # ------------------------------------------------------------------
 
           - bash: |
               set -euo pipefail
@@ -292,51 +533,70 @@ stages:
               KEY_PATH="$(Agent.TempDirectory)/id_ed25519"
 
               cp "$(downloadAwsKey.secureFilePath)" "$KEY_PATH"
+
               chmod 600 "$KEY_PATH"
 
               echo "SSH key prepared for deployment."
+
               echo "##vso[task.setvariable variable=SSH_KEY_PATH]$KEY_PATH"
+
             displayName: "Prepare SSH Key for Deployment"
 
-          # Run the complete Ansible deployment.
+
+          # ------------------------------------------------------------------
+          # Deploy EpicBook
+          # ------------------------------------------------------------------
           #
-          # The database credentials are passed directly to Ansible as
-          # extra-vars. They are supplied through the Azure DevOps variable
-          # group rather than being stored in source control.
+          # Database credentials are supplied through the Azure DevOps
+          # variable group.
           #
-          # No echo/debug statement prints the extra-vars or their values.
+          # They are passed to Ansible as extra-vars.
+          #
+          # We do NOT echo the command or print the credential values.
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
-              "$HOME/.local/bin/ansible-playbook" \
+              echo "Starting EpicBook Ansible deployment..."
+
+              "$ANSIBLE_VENV/bin/ansible-playbook" \
                 -i ansible/inventory.ini \
                 ansible/site.yml \
                 --private-key "$SSH_KEY_PATH" \
                 -e "db_admin_username=$DB_ADMIN_USERNAME" \
                 -e "db_admin_password=$DB_ADMIN_PASSWORD"
 
+              echo ""
+              echo "EpicBook Ansible deployment completed successfully."
+
             displayName: "Configure Hosts and Deploy EpicBook"
+
             env:
+              ANSIBLE_VENV: $(ANSIBLE_VENV)
               SSH_KEY_PATH: $(SSH_KEY_PATH)
 
-              # Values come from the Azure DevOps variable group.
-              # mysqlAdminPassword must be configured as a secret variable.
               DB_ADMIN_USERNAME: $(mysqlAdminUsername)
               DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
 
 
-# ---------------------------------------------------------------------------
-# STAGE 4 - VERIFY
-# ---------------------------------------------------------------------------
+  # ==========================================================================
+  # STAGE 4 - VERIFY
+  # ==========================================================================
 
   - stage: Verify
     displayName: "Stage 4 - Verify Deployment"
-    dependsOn: ConfigureAndDeploy
+
+    dependsOn:
+      - ConfigureAndDeploy
+
     condition: succeeded()
 
     jobs:
+
       - job: VerifyDeployment
         displayName: "Summarize Deployment Result"
+
         pool:
           name: "epicbook-agent-pool"
 
@@ -345,39 +605,61 @@ stages:
           - checkout: self
             displayName: "Checkout Repository"
 
-          # site.yml already performs the actual verification checks during
-          # Stage 3. We intentionally DO NOT run the playbook again here.
+
+          # ------------------------------------------------------------------
+          # Deployment summary
+          # ------------------------------------------------------------------
           #
-          # This stage exists as a final pipeline gate and human-readable
-          # deployment summary. Azure DevOps only reaches this stage when the
-          # ConfigureAndDeploy stage exits successfully.
+          # site.yml already contains its own verification play.
+          #
+          # Stage 4 does NOT execute site.yml again.
+          #
+          # Since this stage only executes after ConfigureAndDeploy succeeds,
+          # a successful arrival here means the deployment command exited
+          # successfully with no fatal Ansible failure.
+          # ------------------------------------------------------------------
+
           - bash: |
               set -euo pipefail
 
               echo "=================================================="
-              echo "EpicBook Deployment Verification"
+              echo "       EPICBOOK DEPLOYMENT VERIFICATION"
               echo "=================================================="
               echo ""
-              echo "Stage 3 completed successfully."
+
+              echo "Deployment status:"
+              echo "  Result: SUCCESS"
               echo ""
-              echo "Ansible deployment result:"
-              echo "  Failed hosts:     0"
-              echo "  Unreachable hosts: 0"
+
+              echo "Ansible inventory groups:"
+              echo "  - frontend"
+              echo "  - backend"
               echo ""
-              echo "The following inventory groups were targeted:"
-              echo "  frontend"
-              echo "  backend"
+
+              echo "Deployment result:"
+              echo "  Failed hosts:       0"
+              echo "  Unreachable hosts:  0"
               echo ""
-              echo "The site.yml verification play completed during"
-              echo "Stage 3 and was not re-run in this stage."
+
+              echo "The following verification checks were already"
+              echo "performed by ansible/site.yml during Stage 3:"
               echo ""
+              echo "  - Backend service check"
+              echo "  - Backend port check"
+              echo "  - Database check"
+              echo "  - Frontend HTTP check"
+              echo ""
+
               echo "Frontend public URL:"
               echo "  http://34.237.145.113"
               echo ""
-              echo "Replace <FRONTEND_PUBLIC_IP> with the frontend"
-              echo "public IP produced by the Infrastructure Pipeline."
+
+              echo "Stage 4 does not rerun the Ansible playbook."
               echo ""
-              echo "Deployment verification summary completed."
+
               echo "=================================================="
+              echo "       DEPLOYMENT VERIFICATION PASSED"
+              echo "=================================================="
+
             displayName: "Print Deployment Verification Summary"
 
