@@ -5,9 +5,6 @@ trigger:
 
   paths:
     include:
-      - server.js
-      - package.json
-      - package-lock.json
       - routes/**
       - models/**
       - views/**
@@ -15,6 +12,9 @@ trigger:
       - config/**
       - db/**
       - ansible/**
+      - server.js
+      - package.json
+      - package-lock.json
       - azure-pipelines.yml
 
 pr:
@@ -22,8 +22,17 @@ pr:
     include:
       - main
 
+pool:
+  name: "epicbook-agent-pool"
+
 variables:
-  - group: Epicbook-mysql-secrets
+  - group: "Epicbook-mysql-secrets"
+
+  - name: ANSIBLE_VENV
+    value: "$(Agent.TempDirectory)/epicbook-ansible-venv"
+
+  - name: ANSIBLE_HOST_KEY_CHECKING
+    value: "False"
 
 
 # ============================================================
@@ -36,32 +45,26 @@ stages:
   displayName: "1. Prepare"
 
   jobs:
-
   - job: PrepareEnvironment
     displayName: "Prepare Ansible Environment"
 
-    pool:
-      name: "epicbook-agent-pool"
-
     steps:
 
-    # --------------------------------------------------------
-    # Checkout repository
-    # --------------------------------------------------------
     - checkout: self
       displayName: "Checkout Repository"
 
 
     # --------------------------------------------------------
-    # Install Python tooling
+    # Install Python / pip / venv
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         echo "Installing Python tooling..."
 
         sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv
+        sudo apt-get install -y python3-pip python3-venv openssh-client
 
         echo "Python version:"
         python3 --version
@@ -73,57 +76,57 @@ stages:
 
 
     # --------------------------------------------------------
-    # Create isolated Ansible environment
+    # Create Ansible virtual environment
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
-        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+        echo "Creating Ansible virtual environment..."
 
-        rm -rf "$VENV_PATH"
+        rm -rf "$(ANSIBLE_VENV)"
 
-        python3 -m venv "$VENV_PATH"
+        python3 -m venv "$(ANSIBLE_VENV)"
 
-        "$VENV_PATH/bin/python" -m pip install --upgrade pip
-        "$VENV_PATH/bin/pip" install ansible
+        "$(ANSIBLE_VENV)/bin/python" -m pip install --upgrade pip
 
-        echo "Installed Ansible:"
-        "$VENV_PATH/bin/ansible" --version
+        "$(ANSIBLE_VENV)/bin/pip" install ansible
 
-        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+        echo "Ansible version:"
+        "$(ANSIBLE_VENV)/bin/ansible" --version
 
-      displayName: "Install Ansible"
+      displayName: "Create Ansible Environment"
 
 
     # --------------------------------------------------------
-    # Install MySQL Ansible collection
+    # Install required Ansible collection
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
-        "$ANSIBLE_VENV/bin/ansible-galaxy" \
-          collection install community.mysql
+        echo "Installing Ansible collections..."
 
-      displayName: "Install Ansible MySQL Collection"
+        "$(ANSIBLE_VENV)/bin/ansible-galaxy" collection install community.mysql
 
-      env:
-        ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Install Ansible Collections"
 
 
     # --------------------------------------------------------
-    # Download SSH private key
+    # Download SSH private key securely
     # --------------------------------------------------------
+
     - task: DownloadSecureFile@1
       name: downloadSSHKey
-      displayName: "Download Secure SSH Key"
-
+      displayName: "Download SSH Private Key"
       inputs:
         secureFile: "id_ed25519"
 
 
     # --------------------------------------------------------
-    # Prepare SSH key
+    # Prepare key
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
@@ -131,12 +134,11 @@ stages:
 
         chmod 600 "$SSH_KEY_PATH"
 
-        echo "SSH key prepared successfully."
+        echo "SSH private key prepared."
 
         echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
 
       displayName: "Prepare Secure SSH Key"
-
 
 
 # ============================================================
@@ -148,21 +150,12 @@ stages:
 
   dependsOn: Prepare
 
-  condition: succeeded()
-
   jobs:
-
   - job: ValidateAnsible
     displayName: "Validate Ansible Configuration"
 
-    pool:
-      name: "epicbook-agent-pool"
-
     steps:
 
-    # --------------------------------------------------------
-    # Checkout repository
-    # --------------------------------------------------------
     - checkout: self
       displayName: "Checkout Repository"
 
@@ -170,147 +163,118 @@ stages:
     # --------------------------------------------------------
     # Install Python tooling
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv
+        sudo apt-get install -y python3-pip python3-venv openssh-client netcat-openbsd
 
-      displayName: "Install Python Tooling"
+        rm -rf "$(ANSIBLE_VENV)"
 
+        python3 -m venv "$(ANSIBLE_VENV)"
 
-    # --------------------------------------------------------
-    # Create Ansible virtual environment
-    # --------------------------------------------------------
-    - bash: |
-        set -e
+        "$(ANSIBLE_VENV)/bin/python" -m pip install --upgrade pip
 
-        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+        "$(ANSIBLE_VENV)/bin/pip" install ansible
 
-        rm -rf "$VENV_PATH"
-
-        python3 -m venv "$VENV_PATH"
-
-        "$VENV_PATH/bin/python" -m pip install --upgrade pip
-        "$VENV_PATH/bin/pip" install ansible
-
-        "$VENV_PATH/bin/ansible" --version
-
-        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
-
-      displayName: "Install Ansible"
-
-
-    # --------------------------------------------------------
-    # Install MySQL collection
-    # --------------------------------------------------------
-    - bash: |
-        set -e
-
-        "$ANSIBLE_VENV/bin/ansible-galaxy" \
+        "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
           collection install community.mysql
 
-      displayName: "Install Ansible MySQL Collection"
-
-      env:
-        ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Prepare Ansible Environment"
 
 
     # --------------------------------------------------------
     # Validate inventory
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         echo "Validating Ansible inventory..."
 
-        "$ANSIBLE_VENV/bin/ansible-inventory" \
+        "$(ANSIBLE_VENV)/bin/ansible-inventory" \
           -i ansible/inventory.ini \
-          --list \
-          > "$(Agent.TempDirectory)/ansible-inventory.json"
+          --list
 
-        echo "Ansible inventory is valid."
-
-      displayName: "Validate Ansible Inventory"
-
-      env:
-        ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Validate Inventory"
 
 
     # --------------------------------------------------------
     # Validate playbook syntax
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
-        "$ANSIBLE_VENV/bin/ansible-playbook" \
-          ansible/site.yml \
-          -i ansible/inventory.ini \
-          --syntax-check
+        echo "Checking Ansible playbook syntax..."
 
-        echo "Ansible syntax validation passed."
+        "$(ANSIBLE_VENV)/bin/ansible-playbook" \
+          -i ansible/inventory.ini \
+          ansible/site.yml \
+          --syntax-check
 
       displayName: "Ansible Syntax Check"
 
-      env:
-        ANSIBLE_VENV: $(ANSIBLE_VENV)
-
 
     # --------------------------------------------------------
-    # Download SSH private key
+    # Download SSH key
     # --------------------------------------------------------
+
     - task: DownloadSecureFile@1
       name: downloadSSHKey
-      displayName: "Download Secure SSH Key"
-
+      displayName: "Download SSH Private Key"
       inputs:
         secureFile: "id_ed25519"
 
 
     # --------------------------------------------------------
-    # Prepare SSH key
+    # Configure SSH
+    #
+    # Frontend:
+    #
+    # Azure DevOps Agent
+    #        |
+    #        | SSH
+    #        v
+    # 34.237.145.113
+    #
+    # Backend:
+    #
+    # Azure DevOps Agent
+    #        |
+    #        | SSH ProxyCommand
+    #        v
+    # Frontend
+    #        |
+    #        | SSH
+    #        v
+    # 10.0.2.157
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
-
         chmod 600 "$SSH_KEY_PATH"
-
-        echo "SSH key prepared successfully."
-
-        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
-
-      displayName: "Prepare Secure SSH Key"
-
-
-    # --------------------------------------------------------
-    # Create temporary SSH configuration
-    #
-    # Frontend:
-    #   Direct connection
-    #
-    # Backend:
-    #   Connection through frontend
-    # --------------------------------------------------------
-    - bash: |
-        set -e
 
         SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
 
         cat > "$SSH_CONFIG" <<EOF
-        Host 34.237.145.113
+        Host epicbook-frontend
           HostName 34.237.145.113
           User ubuntu
           IdentityFile $SSH_KEY_PATH
+          IdentitiesOnly yes
           StrictHostKeyChecking no
           UserKnownHostsFile /dev/null
 
-        Host 10.0.2.157
+        Host epicbook-backend
           HostName 10.0.2.157
           User ubuntu
           IdentityFile $SSH_KEY_PATH
-          ProxyJump ubuntu@34.237.145.113
+          IdentitiesOnly yes
+          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
           StrictHostKeyChecking no
           UserKnownHostsFile /dev/null
         EOF
@@ -319,40 +283,73 @@ stages:
 
         echo "SSH configuration created."
 
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
         echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
 
       displayName: "Configure SSH Jump Host"
 
-      env:
-        SSH_KEY_PATH: $(SSH_KEY_PATH)
-
 
     # --------------------------------------------------------
-    # Test SSH connectivity
+    # Test frontend SSH
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
-        echo "Testing SSH connectivity to all Ansible hosts..."
+        echo "Testing SSH connectivity to frontend..."
 
-        "$ANSIBLE_VENV/bin/ansible" \
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "echo 'Frontend SSH: SUCCESS'"
+
+      displayName: "Test Frontend SSH"
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # Test backend SSH through frontend
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Testing backend connectivity through frontend..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "echo 'Backend SSH through frontend: SUCCESS'"
+
+      displayName: "Test Backend SSH Through Frontend"
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # Test Ansible connectivity
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Testing Ansible connectivity to all hosts..."
+
+        "$(ANSIBLE_VENV)/bin/ansible" \
           -i ansible/inventory.ini \
           all \
           -m ping \
-          --private-key "$SSH_KEY_PATH" \
-          --ssh-common-args="-F $SSH_CONFIG"
+          --private-key "$(SSH_KEY_PATH)" \
+          --ssh-common-args="-F $(SSH_CONFIG)"
 
-        echo "SSH connectivity test completed successfully."
-
-      displayName: "Test SSH Connectivity"
+      displayName: "Ansible Connectivity Test"
 
       env:
         ANSIBLE_VENV: $(ANSIBLE_VENV)
         SSH_KEY_PATH: $(SSH_KEY_PATH)
         SSH_CONFIG: $(SSH_CONFIG)
-
         ANSIBLE_HOST_KEY_CHECKING: "False"
-
 
 
 # ============================================================
@@ -364,88 +361,55 @@ stages:
 
   dependsOn: Validate
 
-  condition: succeeded()
-
   jobs:
-
   - job: DeployEpicBook
     displayName: "Configure Servers and Deploy EpicBook"
 
-    pool:
-      name: "epicbook-agent-pool"
-
     steps:
 
-    # --------------------------------------------------------
-    # Checkout repository
-    # --------------------------------------------------------
     - checkout: self
       displayName: "Checkout Repository"
 
 
     # --------------------------------------------------------
-    # Install Python tooling
+    # Prepare Ansible
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv
+        sudo apt-get install -y python3-pip python3-venv openssh-client
 
-      displayName: "Install Python Tooling"
+        rm -rf "$(ANSIBLE_VENV)"
 
+        python3 -m venv "$(ANSIBLE_VENV)"
 
-    # --------------------------------------------------------
-    # Create Ansible virtual environment
-    # --------------------------------------------------------
-    - bash: |
-        set -e
+        "$(ANSIBLE_VENV)/bin/python" -m pip install --upgrade pip
 
-        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+        "$(ANSIBLE_VENV)/bin/pip" install ansible
 
-        rm -rf "$VENV_PATH"
-
-        python3 -m venv "$VENV_PATH"
-
-        "$VENV_PATH/bin/python" -m pip install --upgrade pip
-        "$VENV_PATH/bin/pip" install ansible
-
-        "$VENV_PATH/bin/ansible" --version
-
-        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
-
-      displayName: "Install Ansible"
-
-
-    # --------------------------------------------------------
-    # Install MySQL collection
-    # --------------------------------------------------------
-    - bash: |
-        set -e
-
-        "$ANSIBLE_VENV/bin/ansible-galaxy" \
+        "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
           collection install community.mysql
 
-      displayName: "Install Ansible MySQL Collection"
-
-      env:
-        ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Prepare Ansible Environment"
 
 
     # --------------------------------------------------------
     # Download SSH private key
     # --------------------------------------------------------
+
     - task: DownloadSecureFile@1
       name: downloadSSHKey
-      displayName: "Download Secure SSH Key"
-
+      displayName: "Download SSH Private Key"
       inputs:
         secureFile: "id_ed25519"
 
 
     # --------------------------------------------------------
-    # Prepare SSH key
+    # Configure SSH jump
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
@@ -453,80 +417,88 @@ stages:
 
         chmod 600 "$SSH_KEY_PATH"
 
-        echo "SSH key prepared successfully."
-
-        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
-
-      displayName: "Prepare Secure SSH Key"
-
-
-    # --------------------------------------------------------
-    # Configure SSH jump host
-    # --------------------------------------------------------
-    - bash: |
-        set -e
-
         SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
 
         cat > "$SSH_CONFIG" <<EOF
-        Host 34.237.145.113
+        Host epicbook-frontend
           HostName 34.237.145.113
           User ubuntu
           IdentityFile $SSH_KEY_PATH
+          IdentitiesOnly yes
           StrictHostKeyChecking no
           UserKnownHostsFile /dev/null
 
-        Host 10.0.2.157
+        Host epicbook-backend
           HostName 10.0.2.157
           User ubuntu
           IdentityFile $SSH_KEY_PATH
-          ProxyJump ubuntu@34.237.145.113
+          IdentitiesOnly yes
+          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
           StrictHostKeyChecking no
           UserKnownHostsFile /dev/null
         EOF
 
         chmod 600 "$SSH_CONFIG"
 
-        echo "SSH jump-host configuration prepared."
-
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
         echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
 
       displayName: "Configure SSH Jump Host"
 
+
+    # --------------------------------------------------------
+    # Verify SSH before deployment
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Verifying frontend SSH..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "echo 'Frontend SSH: SUCCESS'"
+
+        echo "Verifying backend SSH through frontend..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "echo 'Backend SSH through frontend: SUCCESS'"
+
+      displayName: "Verify SSH Connectivity"
+
       env:
-        SSH_KEY_PATH: $(SSH_KEY_PATH)
+        SSH_CONFIG: $(SSH_CONFIG)
 
 
     # --------------------------------------------------------
-    # Deploy EpicBook
+    # Run Ansible deployment
     # --------------------------------------------------------
+
     - bash: |
         set -e
 
         echo "Starting EpicBook deployment..."
 
-        "$ANSIBLE_VENV/bin/ansible-playbook" \
+        "$(ANSIBLE_VENV)/bin/ansible-playbook" \
           -i ansible/inventory.ini \
           ansible/site.yml \
-          --private-key "$SSH_KEY_PATH" \
-          --ssh-common-args="-F $SSH_CONFIG" \
-          -e "db_admin_username=$DB_ADMIN_USERNAME" \
-          -e "db_admin_password=$DB_ADMIN_PASSWORD"
+          --private-key "$(SSH_KEY_PATH)" \
+          --ssh-common-args="-F $(SSH_CONFIG)" \
+          -e "db_admin_username=$(mysqlAdminUsername)" \
+          -e "db_admin_password=$(mysqlAdminPassword)"
 
-        echo "EpicBook deployment completed successfully."
-
-      displayName: "Deploy EpicBook with Ansible"
+      displayName: "Run Ansible Deployment"
 
       env:
         ANSIBLE_VENV: $(ANSIBLE_VENV)
         SSH_KEY_PATH: $(SSH_KEY_PATH)
         SSH_CONFIG: $(SSH_CONFIG)
-
-        DB_ADMIN_USERNAME: $(mysqlAdminUsername)
-        DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
-
         ANSIBLE_HOST_KEY_CHECKING: "False"
-
+        mysqlAdminUsername: $(mysqlAdminUsername)
+        mysqlAdminPassword: $(mysqlAdminPassword)
 
 
 # ============================================================
@@ -541,12 +513,8 @@ stages:
   condition: succeeded()
 
   jobs:
-
   - job: VerifyDeployment
     displayName: "Verify EpicBook Deployment"
-
-    pool:
-      name: "epicbook-agent-pool"
 
     steps:
 
@@ -555,36 +523,114 @@ stages:
 
 
     # --------------------------------------------------------
-    # Deployment verification
+    # Prepare SSH
     # --------------------------------------------------------
+
+    - task: DownloadSecureFile@1
+      name: downloadSSHKey
+      displayName: "Download SSH Private Key"
+      inputs:
+        secureFile: "id_ed25519"
+
+
+    # --------------------------------------------------------
+    # Create SSH configuration
+    # --------------------------------------------------------
+
     - bash: |
         set -e
 
-        echo ""
-        echo "=================================================="
-        echo "       EPICBOOK DEPLOYMENT VERIFICATION"
-        echo "=================================================="
-        echo ""
+        SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
 
-        echo "Prepare stage: SUCCESS"
-        echo "Validation stage: SUCCESS"
-        echo "Configure and Deploy stage: SUCCESS"
-        echo "Ansible deployment command: SUCCESS"
-        echo "Ansible exit code: 0"
-        echo "Unreachable hosts: 0"
-        echo "Failed hosts: 0"
+        chmod 600 "$SSH_KEY_PATH"
 
-        echo ""
-        echo "Frontend:"
-        echo "http://34.237.145.113"
+        SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
 
-        echo ""
-        echo "Backend:"
-        echo "10.0.2.157 (private)"
+        cat > "$SSH_CONFIG" <<EOF
+        Host epicbook-frontend
+          HostName 34.237.145.113
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          IdentitiesOnly yes
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
 
-        echo ""
-        echo "=================================================="
-        echo "EpicBook deployment verification completed."
-        echo "=================================================="
+        Host epicbook-backend
+          HostName 10.0.2.157
+          User ubuntu
+          IdentityFile $SSH_KEY_PATH
+          IdentitiesOnly yes
+          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
+          StrictHostKeyChecking no
+          UserKnownHostsFile /dev/null
+        EOF
 
-      displayName: "Verify Deployment Result"
+        chmod 600 "$SSH_CONFIG"
+
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+        echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
+
+      displayName: "Configure SSH"
+
+
+    # --------------------------------------------------------
+    # Verify frontend
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Checking frontend server..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "hostname && systemctl is-active nginx"
+
+      displayName: "Verify Frontend"
+
+
+    # --------------------------------------------------------
+    # Verify backend
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Checking backend server..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "hostname"
+
+      displayName: "Verify Backend"
+
+
+    # --------------------------------------------------------
+    # Verify application through frontend
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Checking EpicBook application..."
+
+        HTTP_STATUS=$(curl \
+          -s \
+          -o /dev/null \
+          -w "%{http_code}" \
+          --connect-timeout 10 \
+          http://34.237.145.113)
+
+        echo "EpicBook HTTP status: $HTTP_STATUS"
+
+        if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 500 ]; then
+          echo "EpicBook application is reachable."
+        else
+          echo "EpicBook application verification failed."
+
+          exit 1
+        fi
+
+      displayName: "Verify EpicBook HTTP"
