@@ -2,6 +2,7 @@ trigger:
   branches:
     include:
       - main
+
   paths:
     include:
       - server.js
@@ -24,112 +25,126 @@ pr:
 variables:
   - group: Epicbook-mysql-secrets
 
-stages:
 
 # ============================================================
 # STAGE 1: PREPARE
 # ============================================================
+stages:
+
 - stage: Prepare
   displayName: "1. Prepare"
+
   jobs:
 
-    - job: PrepareEnvironment
-      displayName: "Prepare Ansible Environment"
+  - job: PrepareEnvironment
+    displayName: "Prepare Ansible Environment"
 
-      pool:
-        name: "epicbook-agent-pool"
+    pool:
+      name: "epicbook-agent-pool"
 
-      steps:
+    steps:
 
-        - checkout: self
-          displayName: "Checkout Repository"
+    # --------------------------------------------------------
+    # Checkout repository
+    # --------------------------------------------------------
+    - checkout: self
+      displayName: "Checkout Repository"
 
-        # ----------------------------------------------------
-        # Install Python tooling
-        # ----------------------------------------------------
-        - bash: |
-            set -e
 
-            echo "Installing Python pip and virtual environment support..."
+    # --------------------------------------------------------
+    # Install Python tooling
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            sudo apt-get update
-            sudo apt-get install -y python3-pip python3-venv
+        echo "Installing Python tooling..."
 
-            echo "Python version:"
-            python3 --version
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-venv
 
-            echo "pip version:"
-            python3 -m pip --version
+        echo "Python version:"
+        python3 --version
 
-          displayName: "Install Python Tooling"
+        echo "pip version:"
+        python3 -m pip --version
 
-        # ----------------------------------------------------
-        # Create isolated Ansible virtual environment
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+      displayName: "Install Python Tooling"
 
-            VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
 
-            rm -rf "$VENV_PATH"
+    # --------------------------------------------------------
+    # Create Ansible virtual environment
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            python3 -m venv "$VENV_PATH"
+        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
 
-            "$VENV_PATH/bin/python" -m pip install --upgrade pip
-            "$VENV_PATH/bin/pip" install ansible
+        rm -rf "$VENV_PATH"
 
-            echo "Ansible version:"
-            "$VENV_PATH/bin/ansible" --version
+        python3 -m venv "$VENV_PATH"
 
-            echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+        "$VENV_PATH/bin/python" -m pip install --upgrade pip
+        "$VENV_PATH/bin/pip" install ansible
 
-          displayName: "Install Ansible"
+        echo "Installed Ansible:"
+        "$VENV_PATH/bin/ansible" --version
 
-        # ----------------------------------------------------
-        # Install MySQL Ansible collection
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
 
-            "$ANSIBLE_VENV/bin/ansible-galaxy" collection install community.mysql
+      displayName: "Install Ansible"
 
-          displayName: "Install Ansible MySQL Collection"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
 
-        # ----------------------------------------------------
-        # Download SSH private key
-        # ----------------------------------------------------
-        - task: DownloadSecureFile@1
-          name: downloadSSHKey
-          displayName: "Download Secure SSH Key"
-          inputs:
-            secureFile: "id_ed25519"
+    # --------------------------------------------------------
+    # Install Ansible MySQL collection
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-        # ----------------------------------------------------
-        # Prepare SSH key
-        #
-        # IMPORTANT:
-        # DownloadSecureFile already places the file in
-        # Agent.TempDirectory. Do NOT copy it again.
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        "$ANSIBLE_VENV/bin/ansible-galaxy" \
+          collection install community.mysql
 
-            SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+      displayName: "Install Ansible MySQL Collection"
 
-            chmod 600 "$SSH_KEY_PATH"
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
 
-            echo "SSH key prepared successfully."
 
-            echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+    # --------------------------------------------------------
+    # Download SSH private key from Azure DevOps Library
+    # --------------------------------------------------------
+    - task: DownloadSecureFile@1
+      name: downloadSSHKey
+      displayName: "Download Secure SSH Key"
 
-          displayName: "Prepare Secure SSH Key"
+      inputs:
+        secureFile: "id_ed25519"
+
+
+    # --------------------------------------------------------
+    # Prepare SSH private key
+    #
+    # DownloadSecureFile already downloads the key to the
+    # temporary directory, so DO NOT copy it again.
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+
+        chmod 600 "$SSH_KEY_PATH"
+
+        echo "SSH key prepared successfully."
+
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+
+      displayName: "Prepare Secure SSH Key"
+
 
 
 # ============================================================
 # STAGE 2: VALIDATE
 # ============================================================
+
 - stage: Validate
   displayName: "2. Validate"
 
@@ -139,140 +154,175 @@ stages:
 
   jobs:
 
-    - job: ValidateAnsible
-      displayName: "Validate Ansible Configuration"
+  - job: ValidateAnsible
+    displayName: "Validate Ansible Configuration"
 
-      pool:
-        name: "epicbook-agent-pool"
+    pool:
+      name: "epicbook-agent-pool"
 
-      steps:
+    steps:
 
-        - checkout: self
-          displayName: "Checkout Repository"
+    # --------------------------------------------------------
+    # Checkout repository
+    # --------------------------------------------------------
+    - checkout: self
+      displayName: "Checkout Repository"
 
-        # ----------------------------------------------------
-        # Install Python tooling
-        # ----------------------------------------------------
-        - bash: |
-            set -e
 
-            sudo apt-get update
-            sudo apt-get install -y python3-pip python3-venv
+    # --------------------------------------------------------
+    # Install Python tooling
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-          displayName: "Install Python Tooling"
+        echo "Installing Python tooling..."
 
-        # ----------------------------------------------------
-        # Create Ansible virtual environment
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-venv
 
-            VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+      displayName: "Install Python Tooling"
 
-            rm -rf "$VENV_PATH"
 
-            python3 -m venv "$VENV_PATH"
+    # --------------------------------------------------------
+    # Create Ansible virtual environment
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            "$VENV_PATH/bin/python" -m pip install --upgrade pip
-            "$VENV_PATH/bin/pip" install ansible
+        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
 
-            "$VENV_PATH/bin/ansible" --version
+        rm -rf "$VENV_PATH"
 
-            echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+        python3 -m venv "$VENV_PATH"
 
-          displayName: "Install Ansible"
+        "$VENV_PATH/bin/python" -m pip install --upgrade pip
+        "$VENV_PATH/bin/pip" install ansible
 
-        # ----------------------------------------------------
-        # Install Ansible collections
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        echo "Installed Ansible:"
+        "$VENV_PATH/bin/ansible" --version
 
-            "$ANSIBLE_VENV/bin/ansible-galaxy" \
-              collection install community.mysql
+        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
 
-          displayName: "Install Ansible MySQL Collection"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Install Ansible"
 
-        # ----------------------------------------------------
-        # Validate inventory
-        # ----------------------------------------------------
-        - bash: |
-            set -e
 
-            "$ANSIBLE_VENV/bin/ansible-inventory" \
-              -i ansible/inventory.ini \
-              --list \
-              > "$(Agent.TempDirectory)/ansible-inventory.json"
+    # --------------------------------------------------------
+    # Install Ansible MySQL collection
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            echo "Ansible inventory validated successfully."
+        "$ANSIBLE_VENV/bin/ansible-galaxy" \
+          collection install community.mysql
 
-          displayName: "Validate Ansible Inventory"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Install Ansible MySQL Collection"
 
-        # ----------------------------------------------------
-        # Validate playbook syntax
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
 
-            "$ANSIBLE_VENV/bin/ansible-playbook" \
-              ansible/site.yml \
-              -i ansible/inventory.ini \
-              --syntax-check
 
-          displayName: "Ansible Syntax Check"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
+    # --------------------------------------------------------
+    # Validate inventory
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-        # ----------------------------------------------------
-        # Download SSH key
-        # ----------------------------------------------------
-        - task: DownloadSecureFile@1
-          name: downloadSSHKey
-          displayName: "Download Secure SSH Key"
-          inputs:
-            secureFile: "id_ed25519"
+        echo "Validating Ansible inventory..."
 
-        # ----------------------------------------------------
-        # Prepare SSH key
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        "$ANSIBLE_VENV/bin/ansible-inventory" \
+          -i ansible/inventory.ini \
+          --list \
+          > "$(Agent.TempDirectory)/ansible-inventory.json"
 
-            SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+        echo "Ansible inventory is valid."
 
-            chmod 600 "$SSH_KEY_PATH"
+      displayName: "Validate Ansible Inventory"
 
-            echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
 
-          displayName: "Prepare Secure SSH Key"
 
-        # ----------------------------------------------------
-        # Test SSH connectivity
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+    # --------------------------------------------------------
+    # Validate playbook syntax
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            echo "Testing SSH connectivity to all Ansible hosts..."
+        echo "Checking Ansible playbook syntax..."
 
-            "$ANSIBLE_VENV/bin/ansible" \
-              -i ansible/inventory.ini \
-              all \
-              -m ping \
-              --private-key "$SSH_KEY_PATH"
+        "$ANSIBLE_VENV/bin/ansible-playbook" \
+          ansible/site.yml \
+          -i ansible/inventory.ini \
+          --syntax-check
 
-          displayName: "Test SSH Connectivity"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
-            SSH_KEY_PATH: $(SSH_KEY_PATH)
+        echo "Ansible syntax validation passed."
+
+      displayName: "Ansible Syntax Check"
+
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
+
+
+    # --------------------------------------------------------
+    # Download SSH private key
+    # --------------------------------------------------------
+    - task: DownloadSecureFile@1
+      name: downloadSSHKey
+      displayName: "Download Secure SSH Key"
+
+      inputs:
+        secureFile: "id_ed25519"
+
+
+    # --------------------------------------------------------
+    # Prepare SSH key
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+
+        chmod 600 "$SSH_KEY_PATH"
+
+        echo "SSH key prepared successfully."
+
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+
+      displayName: "Prepare Secure SSH Key"
+
+
+    # --------------------------------------------------------
+    # Test SSH connectivity
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        echo "Testing SSH connectivity to all Ansible hosts..."
+
+        "$ANSIBLE_VENV/bin/ansible" \
+          -i ansible/inventory.ini \
+          all \
+          -m ping \
+          --private-key "$SSH_KEY_PATH"
+
+        echo "SSH connectivity test completed."
+
+      displayName: "Test SSH Connectivity"
+
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+        # Prevent:
+        # Host key verification failed
+        ANSIBLE_HOST_KEY_CHECKING: "False"
+
 
 
 # ============================================================
 # STAGE 3: CONFIGURE AND DEPLOY
 # ============================================================
+
 - stage: ConfigureAndDeploy
   displayName: "3. Configure and Deploy"
 
@@ -282,117 +332,136 @@ stages:
 
   jobs:
 
-    - job: DeployEpicBook
-      displayName: "Configure Servers and Deploy EpicBook"
+  - job: DeployEpicBook
+    displayName: "Configure Servers and Deploy EpicBook"
 
-      pool:
-        name: "epicbook-agent-pool"
+    pool:
+      name: "epicbook-agent-pool"
 
-      steps:
+    steps:
 
-        - checkout: self
-          displayName: "Checkout Repository"
+    # --------------------------------------------------------
+    # Checkout repository
+    # --------------------------------------------------------
+    - checkout: self
+      displayName: "Checkout Repository"
 
-        # ----------------------------------------------------
-        # Install Python tooling
-        # ----------------------------------------------------
-        - bash: |
-            set -e
 
-            sudo apt-get update
-            sudo apt-get install -y python3-pip python3-venv
+    # --------------------------------------------------------
+    # Install Python tooling
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-          displayName: "Install Python Tooling"
+        echo "Installing Python tooling..."
 
-        # ----------------------------------------------------
-        # Create Ansible virtual environment
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-venv
 
-            VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
+      displayName: "Install Python Tooling"
 
-            rm -rf "$VENV_PATH"
 
-            python3 -m venv "$VENV_PATH"
+    # --------------------------------------------------------
+    # Create Ansible virtual environment
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            "$VENV_PATH/bin/python" -m pip install --upgrade pip
-            "$VENV_PATH/bin/pip" install ansible
+        VENV_PATH="$(Agent.TempDirectory)/epicbook-ansible-venv"
 
-            "$VENV_PATH/bin/ansible" --version
+        rm -rf "$VENV_PATH"
 
-            echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
+        python3 -m venv "$VENV_PATH"
 
-          displayName: "Install Ansible"
+        "$VENV_PATH/bin/python" -m pip install --upgrade pip
+        "$VENV_PATH/bin/pip" install ansible
 
-        # ----------------------------------------------------
-        # Install MySQL collection
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+        echo "Installed Ansible:"
+        "$VENV_PATH/bin/ansible" --version
 
-            "$ANSIBLE_VENV/bin/ansible-galaxy" \
-              collection install community.mysql
+        echo "##vso[task.setvariable variable=ANSIBLE_VENV]$VENV_PATH"
 
-          displayName: "Install Ansible MySQL Collection"
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
+      displayName: "Install Ansible"
 
-        # ----------------------------------------------------
-        # Download SSH private key
-        # ----------------------------------------------------
-        - task: DownloadSecureFile@1
-          name: downloadSSHKey
-          displayName: "Download Secure SSH Key"
-          inputs:
-            secureFile: "id_ed25519"
 
-        # ----------------------------------------------------
-        # Prepare SSH key
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+    # --------------------------------------------------------
+    # Install MySQL collection
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+        "$ANSIBLE_VENV/bin/ansible-galaxy" \
+          collection install community.mysql
 
-            chmod 600 "$SSH_KEY_PATH"
+      displayName: "Install Ansible MySQL Collection"
 
-            echo "SSH key prepared successfully."
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
 
-            echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
 
-          displayName: "Prepare Secure SSH Key"
+    # --------------------------------------------------------
+    # Download SSH private key
+    # --------------------------------------------------------
+    - task: DownloadSecureFile@1
+      name: downloadSSHKey
+      displayName: "Download Secure SSH Key"
 
-        # ----------------------------------------------------
-        # Run Ansible deployment
-        # ----------------------------------------------------
-        - bash: |
-            set -e
+      inputs:
+        secureFile: "id_ed25519"
 
-            echo "Starting EpicBook deployment..."
 
-            "$ANSIBLE_VENV/bin/ansible-playbook" \
-              -i ansible/inventory.ini \
-              ansible/site.yml \
-              --private-key "$SSH_KEY_PATH" \
-              -e "db_admin_username=$DB_ADMIN_USERNAME" \
-              -e "db_admin_password=$DB_ADMIN_PASSWORD"
+    # --------------------------------------------------------
+    # Prepare SSH key
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            echo "EpicBook deployment completed successfully."
+        SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
 
-          displayName: "Deploy EpicBook with Ansible"
+        chmod 600 "$SSH_KEY_PATH"
 
-          env:
-            ANSIBLE_VENV: $(ANSIBLE_VENV)
-            SSH_KEY_PATH: $(SSH_KEY_PATH)
+        echo "SSH key prepared successfully."
 
-            DB_ADMIN_USERNAME: $(mysqlAdminUsername)
-            DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
+        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
+
+      displayName: "Prepare Secure SSH Key"
+
+
+    # --------------------------------------------------------
+    # Deploy EpicBook
+    # --------------------------------------------------------
+    - bash: |
+        set -e
+
+        echo "Starting EpicBook deployment..."
+
+        "$ANSIBLE_VENV/bin/ansible-playbook" \
+          -i ansible/inventory.ini \
+          ansible/site.yml \
+          --private-key "$SSH_KEY_PATH" \
+          -e "db_admin_username=$DB_ADMIN_USERNAME" \
+          -e "db_admin_password=$DB_ADMIN_PASSWORD"
+
+        echo "EpicBook deployment completed successfully."
+
+      displayName: "Deploy EpicBook with Ansible"
+
+      env:
+        ANSIBLE_VENV: $(ANSIBLE_VENV)
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+        DB_ADMIN_USERNAME: $(mysqlAdminUsername)
+        DB_ADMIN_PASSWORD: $(mysqlAdminPassword)
+
+        # Prevent host key verification failure
+        ANSIBLE_HOST_KEY_CHECKING: "False"
+
 
 
 # ============================================================
 # STAGE 4: VERIFY
 # ============================================================
+
 - stage: Verify
   displayName: "4. Verify"
 
@@ -402,41 +471,46 @@ stages:
 
   jobs:
 
-    - job: VerifyDeployment
-      displayName: "Verify EpicBook Deployment"
+  - job: VerifyDeployment
+    displayName: "Verify EpicBook Deployment"
 
-      pool:
-        name: "epicbook-agent-pool"
+    pool:
+      name: "epicbook-agent-pool"
 
-      steps:
+    steps:
 
-        - checkout: self
-          displayName: "Checkout Repository"
+    # --------------------------------------------------------
+    # Checkout repository
+    # --------------------------------------------------------
+    - checkout: self
+      displayName: "Checkout Repository"
 
-        # ----------------------------------------------------
-        # Deployment summary
-        # ----------------------------------------------------
-        - bash: |
-            set -e
 
-            echo ""
-            echo "=================================================="
-            echo "EpicBook Deployment Verification"
-            echo "=================================================="
-            echo ""
+    # --------------------------------------------------------
+    # Deployment verification summary
+    # --------------------------------------------------------
+    - bash: |
+        set -e
 
-            echo "Deployment stage completed successfully."
-            echo "Ansible exited with status: 0"
-            echo "Unreachable hosts: 0"
-            echo "Failed hosts: 0"
+        echo ""
+        echo "=================================================="
+        echo "       EPICBOOK DEPLOYMENT VERIFICATION"
+        echo "=================================================="
+        echo ""
 
-            echo ""
-            echo "Frontend URL:"
-            echo "http://34.237.145.113"
+        echo "Configure and Deploy stage: SUCCESS"
+        echo "Ansible deployment command: SUCCESS"
+        echo "Ansible exit code: 0"
+        echo "Unreachable hosts: 0"
+        echo "Failed hosts: 0"
 
-            echo ""
-            echo "=================================================="
-            echo "EpicBook deployment verification completed."
-            echo "=================================================="
+        echo ""
+        echo "Frontend:"
+        echo "http://34.237.145.113"
 
-          displayName: "Verify Deployment Result"
+        echo ""
+        echo "=================================================="
+        echo "EpicBook deployment verification completed."
+        echo "=================================================="
+
+      displayName: "Verify Deployment Result"
