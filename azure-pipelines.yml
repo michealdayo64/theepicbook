@@ -284,7 +284,7 @@ stages:
             name: downloadAwsKey
             displayName: "Download AWS SSH Private Key"
             inputs:
-              secureFile: "epicbook-aws-key"
+              secureFile: "id_ed25519"
 
           - bash: |
               set -euo pipefail
