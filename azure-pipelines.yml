@@ -190,7 +190,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 34.237.145.113
+            HostName 98.92.115.71
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -206,7 +206,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -241,7 +241,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@34.237.145.113 \
+          ubuntu@98.92.115.71 \
           "echo 'DIRECT FRONTEND SSH: SUCCESS'"
 
       displayName: "Test Agent to Frontend SSH"
@@ -268,7 +268,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@34.237.145.113 \
+          ubuntu@98.92.115.71 \
           "nc -vz -w 10 10.0.2.157 22"
 
       displayName: "Test Frontend to Backend SSH Port"
@@ -295,7 +295,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@34.237.145.113 \
+          ubuntu@98.92.115.71 \
           "nc -vz -w 10 10.0.2.157 3000"
 
       displayName: "Test Frontend to Backend Application Port"
@@ -429,7 +429,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 34.237.145.113
+            HostName 98.92.115.71
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -445,7 +445,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -559,7 +559,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 34.237.145.113
+            HostName 98.92.115.71
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -575,7 +575,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -660,7 +660,7 @@ stages:
           -o /dev/null \
           -w "%{http_code}" \
           --connect-timeout 10 \
-          http://34.237.145.113)
+          http://98.92.115.71)
 
         echo "EpicBook HTTP status: $HTTP_STATUS"
 
