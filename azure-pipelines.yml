@@ -190,7 +190,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 98.92.115.71
+            HostName 100.59.18.41
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -429,7 +429,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 98.92.115.71
+            HostName 100.59.18.41
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -445,7 +445,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -559,7 +559,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 98.92.115.71
+            HostName 100.59.18.41
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -575,7 +575,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -660,7 +660,7 @@ stages:
           -o /dev/null \
           -w "%{http_code}" \
           --connect-timeout 10 \
-          http://98.92.115.71)
+          http://100.59.18.41)
 
         echo "EpicBook HTTP status: $HTTP_STATUS"
 
