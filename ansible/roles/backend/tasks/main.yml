@@ -21,19 +21,23 @@
     mode: '0755'
 
 - name: Build EpicBook deployment archive
-  community.general.archive:
-    path:
-      - "{{ playbook_dir }}/../server.js"
-      - "{{ playbook_dir }}/../package.json"
-      - "{{ playbook_dir }}/../package-lock.json"
-      - "{{ playbook_dir }}/../routes"
-      - "{{ playbook_dir }}/../models"
-      - "{{ playbook_dir }}/../views"
-      - "{{ playbook_dir }}/../public"
-      - "{{ playbook_dir }}/../config"
-      - "{{ playbook_dir }}/../db"
-    dest: "{{ playbook_dir }}/../epicbook-deploy.tar.gz"
-    format: gz
+  ansible.builtin.command:
+    cmd: >
+      tar -czf {{ playbook_dir }}/../epicbook-deploy.tar.gz
+      --exclude=.git
+      --exclude=ansible
+      --exclude=node_modules
+      server.js
+      package.json
+      package-lock.json
+      routes
+      models
+      views
+      public
+      config
+      db
+    args:
+      chdir: "{{ playbook_dir }}/.."
   delegate_to: localhost
   become: false
 
