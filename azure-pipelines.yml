@@ -34,6 +34,13 @@ variables:
   - name: ANSIBLE_HOST_KEY_CHECKING
     value: "False"
 
+  # Current EpicBook hosts
+  - name: FRONTEND_IP
+    value: "100.59.18.41"
+
+  - name: BACKEND_PRIVATE_IP
+    value: "10.0.2.157"
+
 
 # ============================================================
 # STAGE 1 - PREPARE
@@ -56,14 +63,18 @@ stages:
     - bash: |
         set -e
 
+        echo "=========================================="
+        echo "Preparing deployment environment"
+        echo "=========================================="
+
         sudo apt-get update
 
         sudo apt-get install -y \
           python3-pip \
           python3-venv \
           openssh-client \
-          rsync \
-          netcat-openbsd
+          netcat-openbsd \
+          tar
 
         rm -rf "$(ANSIBLE_VENV)"
 
@@ -74,8 +85,12 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix community.general
+          collection install \
+          community.mysql \
+          ansible.posix \
+          community.general
 
+        echo ""
         echo "Ansible version:"
         "$(ANSIBLE_VENV)/bin/ansible" --version
 
@@ -102,7 +117,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Prepare Ansible
+    # Prepare validation environment
     # --------------------------------------------------------
 
     - bash: |
@@ -114,7 +129,6 @@ stages:
           python3-pip \
           python3-venv \
           openssh-client \
-          rsync \
           netcat-openbsd
 
         rm -rf "$(ANSIBLE_VENV)"
@@ -126,7 +140,10 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix community.general
+          collection install \
+          community.mysql \
+          ansible.posix \
+          community.general
 
       displayName: "Prepare Validation Environment"
 
@@ -138,7 +155,9 @@ stages:
     - bash: |
         set -e
 
-        echo "Validating Ansible inventory..."
+        echo "=========================================="
+        echo "Validating Ansible inventory"
+        echo "=========================================="
 
         "$(ANSIBLE_VENV)/bin/ansible-inventory" \
           -i ansible/inventory.ini \
@@ -148,13 +167,15 @@ stages:
 
 
     # --------------------------------------------------------
-    # Validate playbook
+    # Validate playbook syntax
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking Ansible playbook syntax..."
+        echo "=========================================="
+        echo "Checking Ansible playbook syntax"
+        echo "=========================================="
 
         "$(ANSIBLE_VENV)/bin/ansible-playbook" \
           -i ansible/inventory.ini \
@@ -171,12 +192,13 @@ stages:
     - task: DownloadSecureFile@1
       name: downloadSSHKey
       displayName: "Download SSH Private Key"
+
       inputs:
         secureFile: "id_ed25519"
 
 
     # --------------------------------------------------------
-    # Create SSH configuration
+    # Configure SSH jump host
     # --------------------------------------------------------
 
     - bash: |
@@ -190,7 +212,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 100.59.18.41
+            HostName $(FRONTEND_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -199,14 +221,21 @@ stages:
             ConnectTimeout 15
 
         Host epicbook-backend
-            HostName 10.0.2.157
+            HostName $(BACKEND_PRIVATE_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
+            ProxyCommand ssh \
+              -i $SSH_KEY_PATH \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=15 \
+              -W %h:%p \
+              ubuntu@$(FRONTEND_IP)
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -220,7 +249,7 @@ stages:
 
 
     # ========================================================
-    # NETWORK DIAGNOSTICS
+    # NETWORK / SSH VALIDATION
     # ========================================================
 
     # --------------------------------------------------------
@@ -232,27 +261,23 @@ stages:
         set -e
 
         echo "=========================================="
-        echo "TEST 1: Azure DevOps Agent -> Frontend"
+        echo "TEST 1: Agent -> Frontend SSH"
         echo "=========================================="
 
         ssh \
-          -i "$(SSH_KEY_PATH)" \
-          -o IdentitiesOnly=yes \
-          -o StrictHostKeyChecking=no \
-          -o UserKnownHostsFile=/dev/null \
-          -o ConnectTimeout=15 \
-          ubuntu@100.59.18.41 \
-          "echo 'DIRECT FRONTEND SSH: SUCCESS'"
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "echo 'FRONTEND SSH: SUCCESS'"
 
       displayName: "Test Agent to Frontend SSH"
 
       env:
-        SSH_KEY_PATH: $(SSH_KEY_PATH)
+        SSH_CONFIG: $(SSH_CONFIG)
 
 
     # --------------------------------------------------------
     # TEST 2
-    # Frontend -> Backend TCP 22
+    # Frontend -> Backend SSH port
     # --------------------------------------------------------
 
     - bash: |
@@ -263,57 +288,30 @@ stages:
         echo "=========================================="
 
         ssh \
-          -i "$(SSH_KEY_PATH)" \
-          -o IdentitiesOnly=yes \
-          -o StrictHostKeyChecking=no \
-          -o UserKnownHostsFile=/dev/null \
-          -o ConnectTimeout=15 \
-          ubuntu@100.59.18.41 \
-          "nc -vz -w 10 10.0.2.157 22"
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "nc -vz -w 10 $(BACKEND_PRIVATE_IP) 22"
 
       displayName: "Test Frontend to Backend SSH Port"
 
       env:
-        SSH_KEY_PATH: $(SSH_KEY_PATH)
+        SSH_CONFIG: $(SSH_CONFIG)
 
 
     # --------------------------------------------------------
     # TEST 3
-    # Frontend -> Backend TCP 3000
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        echo "=========================================="
-        echo "TEST 3: Frontend -> Backend TCP 3000"
-        echo "=========================================="
-
-        ssh \
-          -i "$(SSH_KEY_PATH)" \
-          -o IdentitiesOnly=yes \
-          -o StrictHostKeyChecking=no \
-          -o UserKnownHostsFile=/dev/null \
-          -o ConnectTimeout=15 \
-          ubuntu@100.59.18.41 \
-          "nc -vz -w 10 10.0.2.157 3000"
-
-      displayName: "Test Frontend to Backend Application Port"
-
-      env:
-        SSH_KEY_PATH: $(SSH_KEY_PATH)
-
-
-    # --------------------------------------------------------
-    # TEST 4
     # Agent -> Backend through Frontend
+    #
+    # IMPORTANT:
+    # We do NOT test port 3000 here.
+    # The application has not been deployed yet.
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
         echo "=========================================="
-        echo "TEST 4: Agent -> Backend through Frontend"
+        echo "TEST 3: Agent -> Backend through Frontend"
         echo "=========================================="
 
         ssh \
@@ -328,7 +326,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # TEST 5
+    # TEST 4
     # Ansible -> all hosts
     # --------------------------------------------------------
 
@@ -336,7 +334,7 @@ stages:
         set -e
 
         echo "=========================================="
-        echo "TEST 5: Ansible connectivity"
+        echo "TEST 4: Ansible connectivity"
         echo "=========================================="
 
         "$(ANSIBLE_VENV)/bin/ansible" \
@@ -364,6 +362,8 @@ stages:
 
   dependsOn: Validate
 
+  condition: succeeded()
+
   jobs:
   - job: DeployEpicBook
     displayName: "Configure Servers and Deploy EpicBook"
@@ -375,11 +375,15 @@ stages:
 
 
     # --------------------------------------------------------
-    # Prepare environment
+    # Prepare deployment environment
     # --------------------------------------------------------
 
     - bash: |
         set -e
+
+        echo "=========================================="
+        echo "Preparing deployment environment"
+        echo "=========================================="
 
         sudo apt-get update
 
@@ -387,7 +391,7 @@ stages:
           python3-pip \
           python3-venv \
           openssh-client \
-          rsync
+          tar
 
         rm -rf "$(ANSIBLE_VENV)"
 
@@ -398,7 +402,12 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix community.general
+          collection install \
+          community.mysql \
+          ansible.posix \
+          community.general
+
+        echo "Deployment environment ready."
 
       displayName: "Prepare Deployment Environment"
 
@@ -410,12 +419,13 @@ stages:
     - task: DownloadSecureFile@1
       name: downloadSSHKey
       displayName: "Download SSH Private Key"
+
       inputs:
         secureFile: "id_ed25519"
 
 
     # --------------------------------------------------------
-    # Configure SSH jump
+    # Configure SSH jump host
     # --------------------------------------------------------
 
     - bash: |
@@ -429,7 +439,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 100.59.18.41
+            HostName $(FRONTEND_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -438,17 +448,26 @@ stages:
             ConnectTimeout 15
 
         Host epicbook-backend
-            HostName 10.0.2.157
+            HostName $(BACKEND_PRIVATE_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
+            ProxyCommand ssh \
+              -i $SSH_KEY_PATH \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=15 \
+              -W %h:%p \
+              ubuntu@$(FRONTEND_IP)
         EOF
 
         chmod 600 "$SSH_CONFIG"
+
+        echo "SSH configuration created."
 
         echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
         echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
@@ -457,20 +476,26 @@ stages:
 
 
     # --------------------------------------------------------
-    # Verify both SSH paths
+    # Verify SSH paths
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Testing frontend SSH..."
+        echo "=========================================="
+        echo "Testing frontend SSH"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
           epicbook-frontend \
           "echo 'Frontend SSH: SUCCESS'"
 
-        echo "Testing backend SSH through frontend..."
+
+        echo ""
+        echo "=========================================="
+        echo "Testing backend SSH through frontend"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
@@ -484,13 +509,15 @@ stages:
 
 
     # --------------------------------------------------------
-    # Run Ansible
+    # Run Ansible deployment
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Starting EpicBook deployment..."
+        echo "=========================================="
+        echo "Starting EpicBook Ansible deployment"
+        echo "=========================================="
 
         "$(ANSIBLE_VENV)/bin/ansible-playbook" \
           -i ansible/inventory.ini \
@@ -534,12 +561,13 @@ stages:
 
 
     # --------------------------------------------------------
-    # Download key
+    # Download SSH key
     # --------------------------------------------------------
 
     - task: DownloadSecureFile@1
       name: downloadSSHKey
       displayName: "Download SSH Private Key"
+
       inputs:
         secureFile: "id_ed25519"
 
@@ -559,7 +587,7 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-            HostName 100.59.18.41
+            HostName $(FRONTEND_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
@@ -568,14 +596,21 @@ stages:
             ConnectTimeout 15
 
         Host epicbook-backend
-            HostName 10.0.2.157
+            HostName $(BACKEND_PRIVATE_IP)
             User ubuntu
             IdentityFile $SSH_KEY_PATH
             IdentitiesOnly yes
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
+            ProxyCommand ssh \
+              -i $SSH_KEY_PATH \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ConnectTimeout=15 \
+              -W %h:%p \
+              ubuntu@$(FRONTEND_IP)
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -587,13 +622,16 @@ stages:
 
 
     # --------------------------------------------------------
+    # TEST 1
     # Verify frontend
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking frontend..."
+        echo "=========================================="
+        echo "TEST 1: Verify Frontend"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
@@ -607,13 +645,16 @@ stages:
 
 
     # --------------------------------------------------------
+    # TEST 2
     # Verify backend
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking backend..."
+        echo "=========================================="
+        echo "TEST 2: Verify Backend SSH"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
@@ -627,18 +668,72 @@ stages:
 
 
     # --------------------------------------------------------
-    # Verify backend application
+    # TEST 3
+    # Verify systemd service
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking backend application..."
+        echo "=========================================="
+        echo "TEST 3: Verify EpicBook systemd service"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
           epicbook-backend \
-          "curl -fsS http://127.0.0.1:3000 || exit 1"
+          "sudo systemctl is-active --quiet epicbook"
+
+        echo "EpicBook systemd service is RUNNING."
+
+      displayName: "Verify EpicBook Service"
+
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # TEST 4
+    # Verify backend port 3000 locally
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "=========================================="
+        echo "TEST 4: Backend localhost TCP 3000"
+        echo "=========================================="
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "nc -vz -w 10 127.0.0.1 3000"
+
+      displayName: "Verify Backend Port 3000"
+
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # TEST 5
+    # Verify backend HTTP
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "=========================================="
+        echo "TEST 5: Backend HTTP"
+        echo "=========================================="
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "curl -fsS http://127.0.0.1:3000"
+
+        echo ""
+        echo "Backend HTTP check: SUCCESS"
 
       displayName: "Verify Backend Application"
 
@@ -647,27 +742,55 @@ stages:
 
 
     # --------------------------------------------------------
-    # Verify public EpicBook endpoint
+    # TEST 6
+    # Frontend -> Backend TCP 3000
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking public EpicBook endpoint..."
+        echo "=========================================="
+        echo "TEST 6: Frontend -> Backend TCP 3000"
+        echo "=========================================="
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-frontend \
+          "nc -vz -w 10 $(BACKEND_PRIVATE_IP) 3000"
+
+        echo "Frontend can reach backend port 3000."
+
+      displayName: "Verify Frontend to Backend Port 3000"
+
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # TEST 7
+    # Public EpicBook endpoint
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "=========================================="
+        echo "TEST 7: Public EpicBook Endpoint"
+        echo "=========================================="
 
         HTTP_STATUS=$(curl \
           -s \
           -o /dev/null \
           -w "%{http_code}" \
           --connect-timeout 10 \
-          http://100.59.18.41)
+          "http://$(FRONTEND_IP)")
 
         echo "EpicBook HTTP status: $HTTP_STATUS"
 
         if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 500 ]; then
-          echo "EpicBook endpoint is reachable."
+          echo "EpicBook public endpoint is reachable."
         else
-          echo "EpicBook endpoint verification failed."
+          echo "EpicBook public endpoint verification failed."
           exit 1
         fi
 
