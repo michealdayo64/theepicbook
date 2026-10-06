@@ -206,7 +206,7 @@ stages:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ConnectTimeout 15
-            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@98.92.115.71
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@100.59.18.41
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -241,7 +241,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@98.92.115.71 \
+          ubuntu@100.59.18.41 \
           "echo 'DIRECT FRONTEND SSH: SUCCESS'"
 
       displayName: "Test Agent to Frontend SSH"
@@ -268,7 +268,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@98.92.115.71 \
+          ubuntu@100.59.18.41 \
           "nc -vz -w 10 10.0.2.157 22"
 
       displayName: "Test Frontend to Backend SSH Port"
@@ -295,7 +295,7 @@ stages:
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o ConnectTimeout=15 \
-          ubuntu@98.92.115.71 \
+          ubuntu@100.59.18.41 \
           "nc -vz -w 10 10.0.2.157 3000"
 
       displayName: "Test Frontend to Backend Application Port"
