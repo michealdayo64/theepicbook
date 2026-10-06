@@ -36,7 +36,7 @@ variables:
 
 
 # ============================================================
-# STAGE 1: PREPARE
+# STAGE 1 - PREPARE
 # ============================================================
 
 stages:
@@ -53,122 +53,17 @@ stages:
     - checkout: self
       displayName: "Checkout Repository"
 
-
-    # --------------------------------------------------------
-    # Install Python / pip / venv
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        echo "Installing Python tooling..."
-
-        sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv openssh-client
-
-        echo "Python version:"
-        python3 --version
-
-        echo "pip version:"
-        python3 -m pip --version
-
-      displayName: "Install Python Tooling"
-
-
-    # --------------------------------------------------------
-    # Create Ansible virtual environment
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        echo "Creating Ansible virtual environment..."
-
-        rm -rf "$(ANSIBLE_VENV)"
-
-        python3 -m venv "$(ANSIBLE_VENV)"
-
-        "$(ANSIBLE_VENV)/bin/python" -m pip install --upgrade pip
-
-        "$(ANSIBLE_VENV)/bin/pip" install ansible
-
-        echo "Ansible version:"
-        "$(ANSIBLE_VENV)/bin/ansible" --version
-
-      displayName: "Create Ansible Environment"
-
-
-    # --------------------------------------------------------
-    # Install required Ansible collection
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        echo "Installing Ansible collections..."
-
-        "$(ANSIBLE_VENV)/bin/ansible-galaxy" collection install community.mysql
-
-      displayName: "Install Ansible Collections"
-
-
-    # --------------------------------------------------------
-    # Download SSH private key securely
-    # --------------------------------------------------------
-
-    - task: DownloadSecureFile@1
-      name: downloadSSHKey
-      displayName: "Download SSH Private Key"
-      inputs:
-        secureFile: "id_ed25519"
-
-
-    # --------------------------------------------------------
-    # Prepare key
-    # --------------------------------------------------------
-
-    - bash: |
-        set -e
-
-        SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
-
-        chmod 600 "$SSH_KEY_PATH"
-
-        echo "SSH private key prepared."
-
-        echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
-
-      displayName: "Prepare Secure SSH Key"
-
-
-# ============================================================
-# STAGE 2: VALIDATE
-# ============================================================
-
-- stage: Validate
-  displayName: "2. Validate"
-
-  dependsOn: Prepare
-
-  jobs:
-  - job: ValidateAnsible
-    displayName: "Validate Ansible Configuration"
-
-    steps:
-
-    - checkout: self
-      displayName: "Checkout Repository"
-
-
-    # --------------------------------------------------------
-    # Install Python tooling
-    # --------------------------------------------------------
-
     - bash: |
         set -e
 
         sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv openssh-client netcat-openbsd
+
+        sudo apt-get install -y \
+          python3-pip \
+          python3-venv \
+          openssh-client \
+          rsync \
+          netcat-openbsd
 
         rm -rf "$(ANSIBLE_VENV)"
 
@@ -179,9 +74,61 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql
+          collection install community.mysql ansible.posix
+
+        echo "Ansible version:"
+        "$(ANSIBLE_VENV)/bin/ansible" --version
 
       displayName: "Prepare Ansible Environment"
+
+
+# ============================================================
+# STAGE 2 - VALIDATE
+# ============================================================
+
+- stage: Validate
+  displayName: "2. Validate"
+
+  dependsOn: Prepare
+
+  jobs:
+  - job: ValidateConfiguration
+    displayName: "Validate Ansible and Network"
+
+    steps:
+
+    - checkout: self
+      displayName: "Checkout Repository"
+
+
+    # --------------------------------------------------------
+    # Prepare Ansible
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        sudo apt-get update
+
+        sudo apt-get install -y \
+          python3-pip \
+          python3-venv \
+          openssh-client \
+          rsync \
+          netcat-openbsd
+
+        rm -rf "$(ANSIBLE_VENV)"
+
+        python3 -m venv "$(ANSIBLE_VENV)"
+
+        "$(ANSIBLE_VENV)/bin/python" -m pip install --upgrade pip
+
+        "$(ANSIBLE_VENV)/bin/pip" install ansible
+
+        "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
+          collection install community.mysql ansible.posix
+
+      displayName: "Prepare Validation Environment"
 
 
     # --------------------------------------------------------
@@ -197,11 +144,11 @@ stages:
           -i ansible/inventory.ini \
           --list
 
-      displayName: "Validate Inventory"
+      displayName: "Validate Ansible Inventory"
 
 
     # --------------------------------------------------------
-    # Validate playbook syntax
+    # Validate playbook
     # --------------------------------------------------------
 
     - bash: |
@@ -229,54 +176,37 @@ stages:
 
 
     # --------------------------------------------------------
-    # Configure SSH
-    #
-    # Frontend:
-    #
-    # Azure DevOps Agent
-    #        |
-    #        | SSH
-    #        v
-    # 34.237.145.113
-    #
-    # Backend:
-    #
-    # Azure DevOps Agent
-    #        |
-    #        | SSH ProxyCommand
-    #        v
-    # Frontend
-    #        |
-    #        | SSH
-    #        v
-    # 10.0.2.157
+    # Create SSH configuration
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
         SSH_KEY_PATH="$(downloadSSHKey.secureFilePath)"
+
         chmod 600 "$SSH_KEY_PATH"
 
         SSH_CONFIG="$(Agent.TempDirectory)/epicbook_ssh_config"
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 98.92.115.71
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 34.237.145.113
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
 
         Host epicbook-backend
-          HostName 10.0.2.157
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 10.0.2.157
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -286,55 +216,128 @@ stages:
         echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
         echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
 
-      displayName: "Configure SSH Jump Host"
+      displayName: "Configure SSH"
 
+
+    # ========================================================
+    # NETWORK DIAGNOSTICS
+    # ========================================================
 
     # --------------------------------------------------------
-    # Test frontend SSH
+    # TEST 1
+    # Agent -> Frontend
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Testing SSH connectivity to frontend..."
+        echo "=========================================="
+        echo "TEST 1: Azure DevOps Agent -> Frontend"
+        echo "=========================================="
 
         ssh \
-          -F "$(SSH_CONFIG)" \
-          epicbook-frontend \
-          "echo 'Frontend SSH: SUCCESS'"
+          -i "$(SSH_KEY_PATH)" \
+          -o IdentitiesOnly=yes \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          -o ConnectTimeout=15 \
+          ubuntu@34.237.145.113 \
+          "echo 'DIRECT FRONTEND SSH: SUCCESS'"
 
-      displayName: "Test Frontend SSH"
+      displayName: "Test Agent to Frontend SSH"
+
       env:
-        SSH_CONFIG: $(SSH_CONFIG)
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
 
 
     # --------------------------------------------------------
-    # Test backend SSH through frontend
+    # TEST 2
+    # Frontend -> Backend TCP 22
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Testing backend connectivity through frontend..."
+        echo "=========================================="
+        echo "TEST 2: Frontend -> Backend TCP 22"
+        echo "=========================================="
+
+        ssh \
+          -i "$(SSH_KEY_PATH)" \
+          -o IdentitiesOnly=yes \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          -o ConnectTimeout=15 \
+          ubuntu@34.237.145.113 \
+          "nc -vz -w 10 10.0.2.157 22"
+
+      displayName: "Test Frontend to Backend SSH Port"
+
+      env:
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+
+    # --------------------------------------------------------
+    # TEST 3
+    # Frontend -> Backend TCP 3000
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "=========================================="
+        echo "TEST 3: Frontend -> Backend TCP 3000"
+        echo "=========================================="
+
+        ssh \
+          -i "$(SSH_KEY_PATH)" \
+          -o IdentitiesOnly=yes \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          -o ConnectTimeout=15 \
+          ubuntu@34.237.145.113 \
+          "nc -vz -w 10 10.0.2.157 3000"
+
+      displayName: "Test Frontend to Backend Application Port"
+
+      env:
+        SSH_KEY_PATH: $(SSH_KEY_PATH)
+
+
+    # --------------------------------------------------------
+    # TEST 4
+    # Agent -> Backend through Frontend
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "=========================================="
+        echo "TEST 4: Agent -> Backend through Frontend"
+        echo "=========================================="
 
         ssh \
           -F "$(SSH_CONFIG)" \
           epicbook-backend \
-          "echo 'Backend SSH through frontend: SUCCESS'"
+          "echo 'BACKEND SSH THROUGH FRONTEND: SUCCESS'"
 
       displayName: "Test Backend SSH Through Frontend"
+
       env:
         SSH_CONFIG: $(SSH_CONFIG)
 
 
     # --------------------------------------------------------
-    # Test Ansible connectivity
+    # TEST 5
+    # Ansible -> all hosts
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Testing Ansible connectivity to all hosts..."
+        echo "=========================================="
+        echo "TEST 5: Ansible connectivity"
+        echo "=========================================="
 
         "$(ANSIBLE_VENV)/bin/ansible" \
           -i ansible/inventory.ini \
@@ -343,7 +346,7 @@ stages:
           --private-key "$(SSH_KEY_PATH)" \
           --ssh-common-args="-F $(SSH_CONFIG)"
 
-      displayName: "Ansible Connectivity Test"
+      displayName: "Test Ansible Connectivity"
 
       env:
         ANSIBLE_VENV: $(ANSIBLE_VENV)
@@ -353,7 +356,7 @@ stages:
 
 
 # ============================================================
-# STAGE 3: CONFIGURE AND DEPLOY
+# STAGE 3 - CONFIGURE AND DEPLOY
 # ============================================================
 
 - stage: ConfigureAndDeploy
@@ -372,14 +375,19 @@ stages:
 
 
     # --------------------------------------------------------
-    # Prepare Ansible
+    # Prepare environment
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
         sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv openssh-client
+
+        sudo apt-get install -y \
+          python3-pip \
+          python3-venv \
+          openssh-client \
+          rsync
 
         rm -rf "$(ANSIBLE_VENV)"
 
@@ -390,13 +398,13 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql
+          collection install community.mysql ansible.posix
 
-      displayName: "Prepare Ansible Environment"
+      displayName: "Prepare Deployment Environment"
 
 
     # --------------------------------------------------------
-    # Download SSH private key
+    # Download SSH key
     # --------------------------------------------------------
 
     - task: DownloadSecureFile@1
@@ -421,21 +429,23 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 98.92.115.71
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 34.237.145.113
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
 
         Host epicbook-backend
-          HostName 10.0.2.157
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 10.0.2.157
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -447,20 +457,20 @@ stages:
 
 
     # --------------------------------------------------------
-    # Verify SSH before deployment
+    # Verify both SSH paths
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Verifying frontend SSH..."
+        echo "Testing frontend SSH..."
 
         ssh \
           -F "$(SSH_CONFIG)" \
           epicbook-frontend \
           "echo 'Frontend SSH: SUCCESS'"
 
-        echo "Verifying backend SSH through frontend..."
+        echo "Testing backend SSH through frontend..."
 
         ssh \
           -F "$(SSH_CONFIG)" \
@@ -474,7 +484,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Run Ansible deployment
+    # Run Ansible
     # --------------------------------------------------------
 
     - bash: |
@@ -498,10 +508,12 @@ stages:
         SSH_KEY_PATH: $(SSH_KEY_PATH)
         SSH_CONFIG: $(SSH_CONFIG)
         ANSIBLE_HOST_KEY_CHECKING: "False"
+        mysqlAdminUsername: $(mysqlAdminUsername)
+        mysqlAdminPassword: $(mysqlAdminPassword)
 
 
 # ============================================================
-# STAGE 4: VERIFY
+# STAGE 4 - VERIFY
 # ============================================================
 
 - stage: Verify
@@ -522,7 +534,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Prepare SSH
+    # Download key
     # --------------------------------------------------------
 
     - task: DownloadSecureFile@1
@@ -533,7 +545,7 @@ stages:
 
 
     # --------------------------------------------------------
-    # Create SSH configuration
+    # Configure SSH
     # --------------------------------------------------------
 
     - bash: |
@@ -547,21 +559,23 @@ stages:
 
         cat > "$SSH_CONFIG" <<EOF
         Host epicbook-frontend
-          HostName 98.92.115.71
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 34.237.145.113
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
 
         Host epicbook-backend
-          HostName 10.0.2.157
-          User ubuntu
-          IdentityFile $SSH_KEY_PATH
-          IdentitiesOnly yes
-          ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ubuntu@34.237.145.113
-          StrictHostKeyChecking no
-          UserKnownHostsFile /dev/null
+            HostName 10.0.2.157
+            User ubuntu
+            IdentityFile $SSH_KEY_PATH
+            IdentitiesOnly yes
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ConnectTimeout 15
+            ProxyCommand ssh -i $SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15 -W %h:%p ubuntu@34.237.145.113
         EOF
 
         chmod 600 "$SSH_CONFIG"
@@ -569,7 +583,7 @@ stages:
         echo "##vso[task.setvariable variable=SSH_KEY_PATH]$SSH_KEY_PATH"
         echo "##vso[task.setvariable variable=SSH_CONFIG]$SSH_CONFIG"
 
-      displayName: "Configure SSH"
+      displayName: "Configure Verification SSH"
 
 
     # --------------------------------------------------------
@@ -579,14 +593,17 @@ stages:
     - bash: |
         set -e
 
-        echo "Checking frontend server..."
+        echo "Checking frontend..."
 
         ssh \
           -F "$(SSH_CONFIG)" \
           epicbook-frontend \
-          "hostname && systemctl is-active nginx"
+          "hostname"
 
       displayName: "Verify Frontend"
+
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
 
 
     # --------------------------------------------------------
@@ -596,7 +613,7 @@ stages:
     - bash: |
         set -e
 
-        echo "Checking backend server..."
+        echo "Checking backend..."
 
         ssh \
           -F "$(SSH_CONFIG)" \
@@ -605,15 +622,38 @@ stages:
 
       displayName: "Verify Backend"
 
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
 
     # --------------------------------------------------------
-    # Verify application through frontend
+    # Verify backend application
     # --------------------------------------------------------
 
     - bash: |
         set -e
 
-        echo "Checking EpicBook application..."
+        echo "Checking backend application..."
+
+        ssh \
+          -F "$(SSH_CONFIG)" \
+          epicbook-backend \
+          "curl -fsS http://127.0.0.1:3000 || exit 1"
+
+      displayName: "Verify Backend Application"
+
+      env:
+        SSH_CONFIG: $(SSH_CONFIG)
+
+
+    # --------------------------------------------------------
+    # Verify public EpicBook endpoint
+    # --------------------------------------------------------
+
+    - bash: |
+        set -e
+
+        echo "Checking public EpicBook endpoint..."
 
         HTTP_STATUS=$(curl \
           -s \
@@ -625,11 +665,10 @@ stages:
         echo "EpicBook HTTP status: $HTTP_STATUS"
 
         if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 500 ]; then
-          echo "EpicBook application is reachable."
+          echo "EpicBook endpoint is reachable."
         else
-          echo "EpicBook application verification failed."
-
+          echo "EpicBook endpoint verification failed."
           exit 1
         fi
 
-      displayName: "Verify EpicBook HTTP"
+      displayName: "Verify Public EpicBook Endpoint"
