@@ -20,22 +20,47 @@
     group: ubuntu
     mode: '0755'
 
-- name: Deploy EpicBook application code
-  ansible.posix.synchronize:
-    src: "{{ playbook_dir }}/../"
-    dest: /opt/epicbook/
-    rsync_opts:
-      - "--exclude=.git"
-      - "--exclude=ansible"
-      - "--exclude=node_modules"
-      - "-e"
-      - "ssh -F {{ ssh_config_path }}"
-    ssh_connection_multiplexing: false
+- name: Build EpicBook deployment archive
+  community.general.archive:
+    path:
+      - "{{ playbook_dir }}/../server.js"
+      - "{{ playbook_dir }}/../package.json"
+      - "{{ playbook_dir }}/../package-lock.json"
+      - "{{ playbook_dir }}/../routes"
+      - "{{ playbook_dir }}/../models"
+      - "{{ playbook_dir }}/../views"
+      - "{{ playbook_dir }}/../public"
+      - "{{ playbook_dir }}/../config"
+      - "{{ playbook_dir }}/../db"
+    dest: "{{ playbook_dir }}/../epicbook-deploy.tar.gz"
+    format: gz
   delegate_to: localhost
+  become: false
+
+- name: Upload EpicBook deployment archive
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../epicbook-deploy.tar.gz"
+    dest: /tmp/epicbook-deploy.tar.gz
+    owner: ubuntu
+    group: ubuntu
+    mode: '0644'
+
+- name: Extract EpicBook application
+  ansible.builtin.unarchive:
+    src: /tmp/epicbook-deploy.tar.gz
+    dest: /opt/epicbook
+    remote_src: true
+    owner: ubuntu
+    group: ubuntu
+
+- name: Remove deployment archive
+  ansible.builtin.file:
+    path: /tmp/epicbook-deploy.tar.gz
+    state: absent
 
 - name: Install Node.js dependencies
-  ansible.builtin.command: npm ci --production
-  args:
+  ansible.builtin.command:
+    cmd: npm ci --omit=dev
     chdir: /opt/epicbook
 
 - name: Deploy database configuration

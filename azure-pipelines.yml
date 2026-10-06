@@ -74,7 +74,7 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix
+          collection install community.mysql ansible.posix community.general
 
         echo "Ansible version:"
         "$(ANSIBLE_VENV)/bin/ansible" --version
@@ -126,7 +126,7 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix
+          collection install community.mysql ansible.posix community.general
 
       displayName: "Prepare Validation Environment"
 
@@ -398,7 +398,7 @@ stages:
         "$(ANSIBLE_VENV)/bin/pip" install ansible
 
         "$(ANSIBLE_VENV)/bin/ansible-galaxy" \
-          collection install community.mysql ansible.posix
+          collection install community.mysql ansible.posix community.general
 
       displayName: "Prepare Deployment Environment"
 
